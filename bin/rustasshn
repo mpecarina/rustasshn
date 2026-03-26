@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${BIN_DIR}/.." && pwd)"
+
+TARGET_BIN="${REPO_ROOT}/target/release/rustasshn"
+STAMP_FILE="${TARGET_BIN}.commit"
+CURRENT_COMMIT="$(cd "${REPO_ROOT}" && git rev-parse HEAD 2>/dev/null || echo unknown)"
+
+NEEDS_BUILD=0
+if [[ ! -x "${TARGET_BIN}" ]]; then
+  NEEDS_BUILD=1
+elif [[ ! -f "${STAMP_FILE}" ]]; then
+  NEEDS_BUILD=1
+elif [[ "$(cat "${STAMP_FILE}" 2>/dev/null)" != "${CURRENT_COMMIT}" ]]; then
+  NEEDS_BUILD=1
+fi
+
+if [[ "${NEEDS_BUILD}" -eq 1 ]]; then
+  (cd "${REPO_ROOT}" && cargo build --release --locked)
+  echo "${CURRENT_COMMIT}" > "${STAMP_FILE}" || true
+fi
+
+exec "${TARGET_BIN}" "$@"

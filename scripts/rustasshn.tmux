@@ -20,30 +20,9 @@ if [[ -z "${LAUNCH_MODE}" ]]; then
   LAUNCH_MODE="popup"
 fi
 
-# Auto-build: rebuild when binary is missing or git commit has changed.
-STAMP_FILE="${BIN_PATH}.commit"
-CURRENT_COMMIT="$(cd "${REPO_ROOT}" && git rev-parse HEAD 2>/dev/null || echo unknown)"
-NEEDS_BUILD=0
-
 if [[ ! -x "${BIN_PATH}" ]]; then
-  NEEDS_BUILD=1
-elif [[ ! -f "${STAMP_FILE}" ]]; then
-  NEEDS_BUILD=1
-elif [[ "$(cat "${STAMP_FILE}" 2>/dev/null)" != "${CURRENT_COMMIT}" ]]; then
-  NEEDS_BUILD=1
-fi
-
-if [[ "${NEEDS_BUILD}" -eq 1 ]]; then
-  tmux display-message "rustasshn: building..."
-  mkdir -p "$(dirname "${BIN_PATH}")"
-  if (cd "${REPO_ROOT}" && cargo build --release --locked) 2>/dev/null; then
-    cp "${REPO_ROOT}/target/release/rustasshn" "${BIN_PATH}" 2>/dev/null || cp "${REPO_ROOT}/target/release/tmux-ssh-manager" "${BIN_PATH}"
-    chmod +x "${BIN_PATH}" || true
-    echo "${CURRENT_COMMIT}" > "${STAMP_FILE}"
-  else
-    tmux display-message -d 5000 "rustasshn: build failed  run 'cd ${REPO_ROOT} && cargo build --release' manually"
-    exit 1
-  fi
+  tmux display-message -d 5000 "rustasshn: missing ${BIN_PATH} (plugin install incomplete)"
+  exit 1
 fi
 
 BIN_ARGS=()

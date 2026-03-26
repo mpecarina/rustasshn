@@ -31,6 +31,13 @@ fn service_name(host: &str, kind: &str) -> String {
     format!("{}:{}:{}", SERVICE_PREFIX, host, normalize_kind(kind))
 }
 
+fn subject_label(host: &str, user: &str) -> String {
+    if !user.is_empty() && user != host {
+        return format!("{}@{}", user, host);
+    }
+    host.to_string()
+}
+
 fn item_label(host: &str, user: &str, kind: &str) -> String {
     let k = normalize_kind(kind);
     if !user.is_empty() && user != host {
@@ -47,7 +54,7 @@ pub fn set(host: &str, user: &str, kind: &str) -> Result<()> {
     let secret = prompt_secret(&format!(
         "Enter {} for {}",
         kind,
-        item_label(&host, &user, &kind)
+        subject_label(&host, &user)
     ))?;
     if secret.trim().is_empty() {
         bail!("empty secret refused");
@@ -175,36 +182,9 @@ fn run_security(args: &[&str]) -> Result<String> {
 
 #[cfg(target_os = "macos")]
 fn prompt_secret(prompt: &str) -> Result<String> {
-    use std::io::{Read, Write};
-
-    let mut tty = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .with_context(|| "open /dev/tty")?;
-    write!(tty, "{}: ", prompt).with_context(|| "write prompt")?;
-    tty.flush().ok();
-
-    // Best-effort: mimic Go behavior by calling stty.
-    let _ = std::process::Command::new("stty")
-        .arg("-echo")
-        .stdin(tty.try_clone()?)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-
-    let mut buf = String::new();
-    tty.read_to_string(&mut buf).ok();
-
-    let _ = std::process::Command::new("stty")
-        .arg("echo")
-        .stdin(tty.try_clone()?)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    writeln!(tty).ok();
-
-    Ok(buf.trim_end_matches(['\r', '\n']).to_string())
+    let p = format!("{}: ", prompt);
+    let s = rpassword::prompt_password(p).with_context(|| "read password")?;
+    Ok(s.trim_end_matches(['\r', '\n']).to_string())
 }
 
 #[cfg(test)]

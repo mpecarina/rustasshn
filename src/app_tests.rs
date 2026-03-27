@@ -66,4 +66,22 @@ mod tests {
         assert_eq!(target.host, "edge1");
         assert_eq!(target.user, "matt");
     }
+
+    #[test]
+    fn test_connect_askpass_env_names_are_stable() {
+        // This test documents the env contract used by the askpass script.
+        // It is not a full integration test.
+        let exe = std::env::current_exe().unwrap();
+        let mut cmd = super::super::app::credential_command_for_path(
+            &exe,
+            "set",
+            "narrs-dev4.lmig.com",
+            "root",
+            "password",
+        );
+        cmd.env("TSSM_HOST", "narrs-dev4.lmig.com");
+        cmd.env("TSSM_USER", "root");
+        assert!(cmd.get_envs().any(|(k, _)| k == "TSSM_HOST"));
+        assert!(cmd.get_envs().any(|(k, _)| k == "TSSM_USER"));
+    }
 }

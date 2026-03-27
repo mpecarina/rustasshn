@@ -211,11 +211,46 @@ fn run_connect(args: ConnectArgs) -> Result<()> {
         return run_connect_split(&alias, args.split_count, &args.split_mode, &args.layout);
     }
 
+    // If a password is stored for this host, force askpass even with a TTY.
+    // This is critical for the zsh `tssm-run` flow which uses `connect`.
+    let host_users = sshconfig::load_default()
+        .ok()
+        .map(|hosts| {
+            hosts
+                .into_iter()
+                .map(|h| (h.alias, h.user))
+                .collect::<std::collections::HashMap<String, String>>()
+        })
+        .unwrap_or_default();
+
+    let user = host_users.get(&alias).cloned().unwrap_or_default();
+    let mut askpass = None;
+    let mut cmd = if credentials::get(&alias, &user, "password").is_ok()
+        && let Ok(Some(script)) = create_askpass_script()
+    {
+        let script_path = script.path().to_path_buf();
+        askpass = Some(script);
+        let mut c = Command::new("ssh");
+        c.arg("-o")
+            .arg("PubkeyAuthentication=no")
+            .arg("-o")
+            .arg("PreferredAuthentications=keyboard-interactive,password")
+            .arg(&alias);
+        c.env("TSSM_HOST", &alias)
+            .env("TSSM_USER", &user)
+            .env("SSH_ASKPASS", script_path)
+            .env("SSH_ASKPASS_REQUIRE", "force")
+            .env("DISPLAY", "1");
+        c
+    } else {
+        let mut c = Command::new("ssh");
+        c.arg(&alias);
+        c
+    };
+
     termio::sanitize_stdin_before_exec().ok();
-    let status = Command::new("ssh")
-        .arg(&alias)
-        .status()
-        .with_context(|| format!("exec ssh {alias}"))?;
+    let status = cmd.status().with_context(|| format!("exec ssh {alias}"))?;
+    drop(askpass);
     exit_from_status(status)
 }
 
@@ -381,7 +416,7 @@ fn credential_command(action: &str, host: &str, user: &str, kind: &str) -> Resul
     Ok(credential_command_for_path(&exe, action, host, user, kind))
 }
 
-fn credential_command_for_path(
+pub(crate) fn credential_command_for_path(
     path: &Path,
     action: &str,
     host: &str,

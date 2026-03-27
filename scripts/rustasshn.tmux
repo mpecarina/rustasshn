@@ -20,6 +20,8 @@ if [[ -z "${LAUNCH_MODE}" ]]; then
   LAUNCH_MODE="popup"
 fi
 
+SHELL_BIN="${SHELL:-sh}"
+
 if [[ ! -x "${BIN_PATH}" ]]; then
   tmux display-message -d 5000 "rustasshn: missing ${BIN_PATH} (plugin install incomplete)"
   exit 1
@@ -42,4 +44,17 @@ if [[ "${LAUNCH_MODE}" == "popup" ]]; then
   fi
 fi
 
-tmux new-window -n "ssh-manager" "${BIN_PATH}" "${BIN_ARGS[@]+${BIN_ARGS[@]}}"
+if [[ "${LAUNCH_MODE}" == "pane" ]]; then
+  # Open selector in a pane in the current window.
+  # Keep the pane alive after rustasshn exits.
+  tmux split-window -v -p 40 -c "#{pane_current_path}" -- "${SHELL_BIN}" -lc "\"${BIN_PATH}\" ${BIN_ARGS[*]} ; exec \"${SHELL_BIN}\" -l"
+  exit 0
+fi
+
+if [[ "${LAUNCH_MODE}" == "window" ]]; then
+  tmux new-window -n "rustasshn" -- "${SHELL_BIN}" -lc "\"${BIN_PATH}\" ${BIN_ARGS[*]} ; exec \"${SHELL_BIN}\" -l"
+  exit 0
+fi
+
+# Fallback
+tmux new-window -n "rustasshn" -- "${SHELL_BIN}" -lc "\"${BIN_PATH}\" ${BIN_ARGS[*]} ; exec \"${SHELL_BIN}\" -l"

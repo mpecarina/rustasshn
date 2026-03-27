@@ -48,7 +48,10 @@ pub struct AppConfig {
 #[derive(Clone)]
 struct Candidate {
     host: sshconfig::Host,
-    search: String,
+    alias_lc: String,
+    hostname_lc: String,
+    proxyjump_lc: String,
+    search_all_lc: String,
     line: String,
 }
 
@@ -77,6 +80,7 @@ struct CredentialModal {
 struct Model {
     app: AppConfig,
     search: String,
+    last_query: String,
     search_focused: bool,
     candidates: Vec<Candidate>,
     filtered: Vec<Candidate>,
@@ -147,6 +151,7 @@ impl Model {
         let mut m = Self {
             app,
             search: String::new(),
+            last_query: String::new(),
             search_focused,
             candidates,
             filtered: Vec::new(),
@@ -169,7 +174,34 @@ impl Model {
 
     fn recompute(&mut self) {
         let q = self.search.trim().to_lowercase();
+
+        if q != self.last_query {
+            self.selected = 0;
+            self.scroll = 0;
+            self.last_query = q.clone();
+        }
+
         let mut out = Vec::new();
+        if q.is_empty() {
+            for c in &self.candidates {
+                if self.filter_favorites && !self.app.store.is_favorite(&c.host.alias) {
+                    continue;
+                }
+                if self.filter_recents && !self.app.store.recents.iter().any(|r| r == &c.host.alias)
+                {
+                    continue;
+                }
+                out.push(c.clone());
+            }
+            self.filtered = out;
+            if self.selected >= self.filtered.len() {
+                self.selected = self.filtered.len().saturating_sub(1);
+            }
+            self.ensure_visible();
+            return;
+        }
+
+        let mut scored: Vec<(MatchSortKey, Candidate)> = Vec::new();
         for c in &self.candidates {
             if self.filter_favorites && !self.app.store.is_favorite(&c.host.alias) {
                 continue;
@@ -177,10 +209,13 @@ impl Model {
             if self.filter_recents && !self.app.store.recents.iter().any(|r| r == &c.host.alias) {
                 continue;
             }
-            if q.is_empty() || fuzzy_match(&q, &c.search) {
-                out.push(c.clone());
+            if let Some(key) = match_sort_key(&q, c) {
+                scored.push((key, c.clone()));
             }
         }
+        scored.sort_by(|(a, _), (b, _)| a.cmp(b));
+        out.extend(scored.into_iter().map(|(_, c)| c));
+
         self.filtered = out;
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
@@ -864,33 +899,175 @@ fn build_candidates(hosts: &[sshconfig::Host]) -> Vec<Candidate> {
         if !h.hostname.is_empty() && h.hostname != h.alias {
             parts.push(format!("-> {}", h.hostname));
         }
-        let search =
+        let alias_lc = h.alias.to_lowercase();
+        let hostname_lc = h.hostname.to_lowercase();
+        let proxyjump_lc = h.proxyjump.to_lowercase();
+        let search_all_lc =
             format!("{} {} {} {}", h.alias, h.hostname, h.user, h.proxyjump).to_lowercase();
         out.push(Candidate {
             host: h.clone(),
-            search,
+            alias_lc,
+            hostname_lc,
+            proxyjump_lc,
+            search_all_lc,
             line: parts.join(" "),
         });
     }
     out
 }
 
-fn fuzzy_match(query: &str, text: &str) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MatchSortKey {
+    bucket: u8,
+    position: u16,
+    len: u16,
+}
+
+impl Ord for MatchSortKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.bucket, self.position, self.len).cmp(&(other.bucket, other.position, other.len))
+    }
+}
+
+impl PartialOrd for MatchSortKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn match_sort_key(query: &str, c: &Candidate) -> Option<MatchSortKey> {
+    // bucket priority: alias prefix, hostname prefix, alias token prefix, hostname token prefix,
+    // alias fuzzy, hostname fuzzy, proxyjump matches, any fuzzy.
+
+    let q = query.trim();
+    if q.is_empty() {
+        return Some(MatchSortKey {
+            bucket: 255,
+            position: 0,
+            len: c.alias_lc.len().min(u16::MAX as usize) as u16,
+        });
+    }
+
+    if c.alias_lc.starts_with(q) {
+        return Some(MatchSortKey {
+            bucket: 0,
+            position: 0,
+            len: c.alias_lc.len().min(u16::MAX as usize) as u16,
+        });
+    }
+    if !c.hostname_lc.is_empty() && c.hostname_lc.starts_with(q) {
+        return Some(MatchSortKey {
+            bucket: 1,
+            position: 0,
+            len: c.hostname_lc.len().min(u16::MAX as usize) as u16,
+        });
+    }
+
+    if let Some(pos) = token_prefix_pos(&c.alias_lc, q) {
+        return Some(MatchSortKey {
+            bucket: 2,
+            position: pos,
+            len: c.alias_lc.len().min(u16::MAX as usize) as u16,
+        });
+    }
+    if let Some(pos) = token_prefix_pos(&c.hostname_lc, q) {
+        return Some(MatchSortKey {
+            bucket: 3,
+            position: pos,
+            len: c.hostname_lc.len().min(u16::MAX as usize) as u16,
+        });
+    }
+
+    if let Some(pos) = fuzzy_match_pos(q, &c.alias_lc) {
+        return Some(MatchSortKey {
+            bucket: 4,
+            position: pos,
+            len: c.alias_lc.len().min(u16::MAX as usize) as u16,
+        });
+    }
+    if let Some(pos) = fuzzy_match_pos(q, &c.hostname_lc) {
+        return Some(MatchSortKey {
+            bucket: 5,
+            position: pos,
+            len: c.hostname_lc.len().min(u16::MAX as usize) as u16,
+        });
+    }
+
+    if !c.proxyjump_lc.is_empty() {
+        if c.proxyjump_lc.starts_with(q) {
+            return Some(MatchSortKey {
+                bucket: 6,
+                position: 0,
+                len: c.proxyjump_lc.len().min(u16::MAX as usize) as u16,
+            });
+        }
+        if let Some(pos) = token_prefix_pos(&c.proxyjump_lc, q) {
+            return Some(MatchSortKey {
+                bucket: 6,
+                position: pos,
+                len: c.proxyjump_lc.len().min(u16::MAX as usize) as u16,
+            });
+        }
+        if let Some(pos) = fuzzy_match_pos(q, &c.proxyjump_lc) {
+            return Some(MatchSortKey {
+                bucket: 6,
+                position: pos,
+                len: c.proxyjump_lc.len().min(u16::MAX as usize) as u16,
+            });
+        }
+    }
+
+    fuzzy_match_pos(q, &c.search_all_lc).map(|pos| MatchSortKey {
+        bucket: 7,
+        position: pos,
+        len: c.alias_lc.len().min(u16::MAX as usize) as u16,
+    })
+}
+
+fn token_prefix_pos(text: &str, q: &str) -> Option<u16> {
+    if q.is_empty() {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let q_bytes = q.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let is_boundary = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+        if is_boundary
+            && bytes.len() - i >= q_bytes.len()
+            && bytes[i..i + q_bytes.len()] == *q_bytes
+        {
+            return Some(i.min(u16::MAX as usize) as u16);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn fuzzy_match_pos(query: &str, text: &str) -> Option<u16> {
     if query.is_empty() {
-        return true;
+        return Some(0);
     }
     let mut qi = query.chars();
     let mut cur = qi.next();
-    for ch in text.chars() {
+    let mut first_match: Option<usize> = None;
+    for (i, ch) in text.chars().enumerate() {
         if let Some(q) = cur {
             if ch == q {
+                if first_match.is_none() {
+                    first_match = Some(i);
+                }
                 cur = qi.next();
             }
         } else {
             break;
         }
     }
-    cur.is_none()
+    if cur.is_none() {
+        Some(first_match.unwrap_or(0).min(u16::MAX as usize) as u16)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -898,8 +1075,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_fuzzy_match() {
-        assert!(fuzzy_match("abc", "a_b_c"));
-        assert!(!fuzzy_match("abc", "acb"));
+    fn test_fuzzy_match_pos() {
+        assert!(fuzzy_match_pos("abc", "a_b_c").is_some());
+        assert!(fuzzy_match_pos("abc", "acb").is_none());
+    }
+
+    #[test]
+    fn test_match_sort_key_prefers_alias_prefix_over_proxyjump() {
+        let h = sshconfig::Host {
+            alias: "bacchus.lmig.com".to_string(),
+            hostname: "".to_string(),
+            user: "".to_string(),
+            port: 0,
+            proxyjump: "".to_string(),
+            identity_files: Vec::new(),
+            source_path: "".to_string(),
+            source_line: 1,
+        };
+        let c_alias = build_candidates(&[h])[0].clone();
+
+        let h2 = sshconfig::Host {
+            alias: "010k-onos-leaf-sw1".to_string(),
+            hostname: "10.0.0.1".to_string(),
+            user: "".to_string(),
+            port: 0,
+            proxyjump: "bacchus.lmig.com".to_string(),
+            identity_files: Vec::new(),
+            source_path: "".to_string(),
+            source_line: 1,
+        };
+        let c_proxy = build_candidates(&[h2])[0].clone();
+
+        let q = "bacchus";
+        let k1 = match_sort_key(q, &c_alias).unwrap();
+        let k2 = match_sort_key(q, &c_proxy).unwrap();
+        assert!(k1.bucket < k2.bucket);
     }
 }

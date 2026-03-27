@@ -671,7 +671,6 @@ impl Model {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
                 Constraint::Length(2),
                 Constraint::Min(1),
                 Constraint::Length(2),
@@ -687,9 +686,6 @@ impl Model {
             return;
         }
 
-        let title = Paragraph::new("rustasshn");
-        f.render_widget(title, chunks[0]);
-
         let search_style = if self.search_focused {
             Style::default().fg(Color::Cyan)
         } else {
@@ -698,9 +694,9 @@ impl Model {
         let search = Paragraph::new(format!("/ {}", self.search))
             .style(search_style)
             .block(Block::default());
-        f.render_widget(search, chunks[1]);
+        f.render_widget(search, chunks[0]);
 
-        let list_height = chunks[2].height as usize;
+        let list_height = chunks[1].height as usize;
         let end = std::cmp::min(self.filtered.len(), self.scroll + list_height);
         let mut lines: Vec<Line> = Vec::new();
         for (i, c) in self.filtered.iter().enumerate().take(end).skip(self.scroll) {
@@ -739,7 +735,7 @@ impl Model {
         let list = Paragraph::new(lines)
             .block(Block::default().borders(Borders::NONE))
             .wrap(Wrap { trim: true });
-        f.render_widget(list, chunks[2]);
+        f.render_widget(list, chunks[1]);
 
         let help = " / search | enter connect | space select | v split-v | s split-h | w window | t tiled | c store cred | d delete cred | f favorite | F favorites | R recents | a add host | q quit ";
         let status = if self.status.is_empty() {
@@ -748,7 +744,7 @@ impl Model {
             format!("{}\n{}", help, self.status)
         };
         let p = Paragraph::new(status).style(Style::default().fg(Color::Gray));
-        f.render_widget(p, chunks[3]);
+        f.render_widget(p, chunks[2]);
     }
 
     fn draw_add(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {

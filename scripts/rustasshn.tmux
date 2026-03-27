@@ -22,13 +22,6 @@ fi
 
 SHELL_BIN="${SHELL:-sh}"
 
-CMD=("${BIN_PATH}")
-if [[ ${#BIN_ARGS[@]} -gt 0 ]]; then
-  CMD+=("${BIN_ARGS[@]}")
-fi
-CMD_STR=""
-printf -v CMD_STR '%q ' "${CMD[@]}"
-
 if [[ ! -x "${BIN_PATH}" ]]; then
   tmux display-message -d 5000 "rustasshn: missing ${BIN_PATH} (plugin install incomplete)"
   exit 1
@@ -44,6 +37,13 @@ fi
 if [[ -n "${ENTER_MODE}" ]]; then
   BIN_ARGS+=(--enter-mode "${ENTER_MODE}")
 fi
+
+CMD=("${BIN_PATH}")
+if [[ ${#BIN_ARGS[@]} -gt 0 ]]; then
+  CMD+=("${BIN_ARGS[@]}")
+fi
+CMD_STR=""
+printf -v CMD_STR '%q ' "${CMD[@]}"
 
 if [[ "${LAUNCH_MODE}" == "popup" ]]; then
   if tmux display-popup -E -w 90% -h 80% -- "${BIN_PATH}" "${BIN_ARGS[@]+${BIN_ARGS[@]}}"; then

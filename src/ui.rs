@@ -136,12 +136,52 @@ pub fn run(app: AppConfig) -> Result<()> {
                 bail!("command failed")
             }
         }
+        Action::ExecWithPause {
+            mut cmd,
+            success_hint,
+        } => {
+            termio::sanitize_stdin_before_exec().ok();
+            let status = cmd.status()?;
+            if !status.success() {
+                bail!("command failed")
+            }
+            eprintln!("{success_hint}");
+            eprintln!("press Enter to continue");
+            pause_for_enter();
+            Ok(())
+        }
+    }
+}
+
+fn pause_for_enter() {
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+
+        if let Ok(mut tty) = std::fs::OpenOptions::new().read(true).open("/dev/tty") {
+            let mut buf = [0u8; 1];
+            loop {
+                match tty.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if buf[0] == b'\n' || buf[0] == b'\r' {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
     }
 }
 
 enum Action {
     Quit,
     Exec(Command),
+    ExecWithPause {
+        cmd: Command,
+        success_hint: &'static str,
+    },
 }
 
 impl Model {
@@ -592,6 +632,12 @@ impl Model {
                 let cmd =
                     (self.app.exec_credential)(&self.cred.action, &self.cred.host, &user, &kind)?;
                 self.show_cred = false;
+                if self.cred.action == "set" {
+                    return Ok(Some(Action::ExecWithPause {
+                        cmd,
+                        success_hint: "password saved",
+                    }));
+                }
                 return Ok(Some(Action::Exec(cmd)));
             }
             (KeyCode::Backspace, _) => {

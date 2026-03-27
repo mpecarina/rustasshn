@@ -338,10 +338,7 @@ impl Model {
                 return Ok(None);
             }
             (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
-                for c in &self.filtered {
-                    self.selected_aliases.insert(c.host.alias.clone());
-                }
-                self.status = format!("Selected: {}", self.selected_aliases.len());
+                self.toggle_select_all_filtered();
                 return Ok(None);
             }
             (KeyCode::Backspace, _) => {
@@ -459,10 +456,7 @@ impl Model {
                 return Ok(None);
             }
             (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
-                for c in &self.filtered {
-                    self.selected_aliases.insert(c.host.alias.clone());
-                }
-                self.status = format!("Selected: {}", self.selected_aliases.len());
+                self.toggle_select_all_filtered();
                 self.pending_g = false;
                 return Ok(None);
             }
@@ -746,6 +740,26 @@ impl Model {
         }
         self.selected = next as usize;
         self.ensure_visible();
+    }
+
+    fn toggle_select_all_filtered(&mut self) {
+        if self.filtered.is_empty() {
+            return;
+        }
+        let all_selected = self
+            .filtered
+            .iter()
+            .all(|c| self.selected_aliases.contains(&c.host.alias));
+        if all_selected {
+            for c in &self.filtered {
+                self.selected_aliases.remove(&c.host.alias);
+            }
+        } else {
+            for c in &self.filtered {
+                self.selected_aliases.insert(c.host.alias.clone());
+            }
+        }
+        self.status = format!("Selected: {}", self.selected_aliases.len());
     }
 
     fn draw(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {

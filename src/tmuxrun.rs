@@ -271,15 +271,15 @@ pub fn log_dir(alias: &str) -> Result<PathBuf> {
 
 fn logs_base_dir() -> Result<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(xdg).join("tmux-ssh-manager").join("logs"));
+        return Ok(PathBuf::from(xdg).join("rustasshn").join("logs"));
     }
-    if let Some(proj) = ProjectDirs::from("", "", "tmux-ssh-manager") {
+    if let Some(proj) = ProjectDirs::from("", "", "rustasshn") {
         return Ok(proj.config_dir().join("logs"));
     }
     let home = std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("resolve home"))?;
     Ok(PathBuf::from(home)
         .join(".config")
-        .join("tmux-ssh-manager")
+        .join("rustasshn")
         .join("logs"))
 }
 
@@ -416,13 +416,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         let got = log_dir("edge1").unwrap();
-        assert_eq!(
-            got,
-            dir.path()
-                .join("tmux-ssh-manager")
-                .join("logs")
-                .join("edge1")
-        );
+        assert_eq!(got, dir.path().join("rustasshn").join("logs").join("edge1"));
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
     }
 

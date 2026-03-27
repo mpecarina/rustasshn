@@ -2,7 +2,7 @@
 set -euo pipefail
 
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)"
-KEY_BIND="$(tmux show -gqv @tmux_ssh_manager_key || true)"
+KEY_BIND="$(tmux show -gqv @rustasshn_key || true)"
 
 if [[ -z "${KEY_BIND}" ]]; then
   KEY_BIND="s"

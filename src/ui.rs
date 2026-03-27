@@ -687,7 +687,7 @@ impl Model {
             return;
         }
 
-        let title = Paragraph::new("tmux-ssh-manager");
+        let title = Paragraph::new("rustasshn");
         f.render_widget(title, chunks[0]);
 
         let search_style = if self.search_focused {

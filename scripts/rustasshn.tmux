@@ -4,11 +4,11 @@ set -euo pipefail
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)"
 REPO_ROOT="$(cd "${CURRENT_DIR}/.." && pwd)"
 
-BIN_PATH="$(tmux show -gqv @tmux_ssh_manager_bin || true)"
-LAUNCH_MODE="$(tmux show -gqv @tmux_ssh_manager_launch_mode || true)"
-PICKER_MODE="$(tmux show -gqv @tmux_ssh_manager_mode || true)"
-IMPLICIT_SELECT="$(tmux show -gqv @tmux_ssh_manager_implicit_select || true)"
-ENTER_MODE="$(tmux show -gqv @tmux_ssh_manager_enter_mode || true)"
+BIN_PATH="$(tmux show -gqv @rustasshn_bin || true)"
+LAUNCH_MODE="$(tmux show -gqv @rustasshn_launch_mode || true)"
+PICKER_MODE="$(tmux show -gqv @rustasshn_mode || true)"
+IMPLICIT_SELECT="$(tmux show -gqv @rustasshn_implicit_select || true)"
+ENTER_MODE="$(tmux show -gqv @rustasshn_enter_mode || true)"
 
 if [[ -z "${BIN_PATH}" ]]; then
   BIN_PATH="${REPO_ROOT}/bin/rustasshn"

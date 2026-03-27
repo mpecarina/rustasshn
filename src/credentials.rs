@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 
-const SERVICE_PREFIX: &str = "tmux-ssh-manager";
+const SERVICE_PREFIX: &str = "rustasshn";
 
 fn normalize_host(host: &str) -> Result<String> {
     let h = host.trim();
@@ -80,6 +80,7 @@ pub fn get(host: &str, user: &str, kind: &str) -> Result<()> {
     let host = normalize_host(host)?;
     let user = normalize_user(&host, user);
     let kind = normalize_kind(kind);
+
     run_security(&[
         "find-generic-password",
         "-s",
@@ -203,7 +204,7 @@ mod tests {
     fn test_service_name() {
         assert_eq!(
             service_name("edge1", "password"),
-            "tmux-ssh-manager:edge1:password"
+            "rustasshn:edge1:password"
         );
     }
 }

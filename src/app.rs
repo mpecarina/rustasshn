@@ -18,7 +18,7 @@ use crate::ui;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser, Debug)]
-#[command(name = "tmux-ssh-manager")]
+#[command(name = "rustasshn")]
 #[command(version = VERSION)]
 #[command(disable_help_subcommand = true)]
 struct Cli {
@@ -199,7 +199,7 @@ fn run_connect(args: ConnectArgs) -> Result<()> {
     let alias = args.alias.trim().to_string();
     if alias.is_empty() {
         bail!(
-            "usage: tmux-ssh-manager connect [--dry-run] [--split-count N] [--split-mode window|v|h] [--layout tiled] <alias>"
+            "usage: rustasshn connect [--dry-run] [--split-count N] [--split-mode window|v|h] [--layout tiled] <alias>"
         )
     }
     if args.dry_run {
@@ -303,7 +303,7 @@ fn subject(host: &str, user: &str) -> String {
 
 fn run_askpass(args: AskpassArgs) -> Result<()> {
     if args.host.trim().is_empty() {
-        bail!("usage: tmux-ssh-manager __askpass --host <alias> [--user <user>] [--kind password]")
+        bail!("usage: rustasshn __askpass --host <alias> [--user <user>] [--kind password]")
     }
     let secret = credentials::reveal(&args.host, &args.user, &args.kind)?;
     print!("{secret}");

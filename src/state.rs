@@ -40,17 +40,19 @@ impl Default for Store {
 
 pub fn default_path() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(p).join("tmux-ssh-manager").join("state.json"));
+        return Ok(PathBuf::from(p).join("rustasshn").join("state.json"));
     }
-    if let Some(proj) = ProjectDirs::from("", "", "tmux-ssh-manager") {
+    if let Some(proj) = ProjectDirs::from("", "", "rustasshn") {
         return Ok(proj.config_dir().join("state.json"));
     }
     let home = std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("resolve home"))?;
     Ok(PathBuf::from(home)
         .join(".config")
-        .join("tmux-ssh-manager")
+        .join("rustasshn")
         .join("state.json"))
 }
+
+// Intentionally no legacy compatibility.
 
 pub fn load(path: &Path) -> Result<Store> {
     let data = match fs::read(path) {
@@ -235,6 +237,7 @@ mod tests {
         let p = default_path().unwrap();
         assert!(p.is_absolute());
         assert!(p.starts_with(dir.path()));
+        assert!(p.to_string_lossy().contains("rustasshn"));
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
     }
 

@@ -671,7 +671,7 @@ impl Model {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),
+                Constraint::Length(1),
                 Constraint::Min(1),
                 Constraint::Length(2),
             ])

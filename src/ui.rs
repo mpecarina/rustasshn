@@ -41,6 +41,7 @@ pub struct AppConfig {
     pub new_window: ActionFn,
     pub split_vert: ActionFn,
     pub split_horiz: ActionFn,
+    pub respawn_origin: ActionFn,
     pub tiled: TiledFn,
     pub setup_logging: LogFn,
 }
@@ -479,6 +480,11 @@ impl Model {
                 let action = self.app.new_window.clone();
                 return self.run_multi(action, "opened tmux windows");
             }
+            (KeyCode::Char('o'), _) => {
+                self.pending_g = false;
+                let action = self.app.respawn_origin.clone();
+                return self.run_multi(action, "opened origin pane");
+            }
             (KeyCode::Char('t'), _) => {
                 self.pending_g = false;
                 return self.run_tiled();
@@ -508,6 +514,10 @@ impl Model {
     fn enter_default(&mut self) -> Result<Option<Action>> {
         if !self.selected_aliases.is_empty() {
             match self.app.enter_mode.as_str() {
+                "o" => {
+                    let action = self.app.respawn_origin.clone();
+                    return self.run_multi(action, "opened origin pane");
+                }
                 "v" => {
                     let action = self.app.split_vert.clone();
                     return self.run_multi(action, "opened vertical splits");
@@ -530,6 +540,10 @@ impl Model {
         self.app.store.add_recent(&alias);
         let _ = state::save(&self.app.state_path, &mut self.app.store);
         match self.app.enter_mode.as_str() {
+            "o" => {
+                let action = self.app.respawn_origin.clone();
+                self.run_multi(action, "opened origin pane")
+            }
             "w" => {
                 let action = self.app.new_window.clone();
                 self.run_multi(action, "opened tmux window")

@@ -112,6 +112,43 @@ impl Session {
         Ok(())
     }
 
+    pub fn respawn_origin_pane(&self, alias: &str) -> Result<()> {
+        if !in_tmux() {
+            bail!("origin pane requires running inside tmux")
+        }
+        let origin_pane = std::env::var("RUSTASSHN_ORIGIN_PANE").unwrap_or_default();
+        if origin_pane.trim().is_empty() {
+            // Fallback: behave like "pane" (current pane).
+            let cmd = self.ssh_command_string(alias);
+            self.run(&["respawn-pane", "-k", "-c", "#{pane_current_path}", "--", login_shell().as_str(), "-lc", cmd.as_str()])?;
+            self.setup_pane_logging(alias);
+            return Ok(());
+        }
+
+        let origin_path = std::env::var("RUSTASSHN_ORIGIN_PATH").unwrap_or_default();
+        let cwd = if origin_path.trim().is_empty() {
+            "#{pane_current_path}"
+        } else {
+            origin_path.trim()
+        };
+
+        let cmd = self.ssh_command_string(alias);
+        self.run(&[
+            "respawn-pane",
+            "-t",
+            origin_pane.trim(),
+            "-k",
+            "-c",
+            cwd,
+            "--",
+            login_shell().as_str(),
+            "-lc",
+            cmd.as_str(),
+        ])?;
+        self.setup_logging(origin_pane.trim(), alias);
+        Ok(())
+    }
+
     pub fn split_vertical(&self, alias: &str) -> Result<()> {
         let pane_id = self.output(&[
             "split-window",

@@ -148,6 +148,7 @@ where
 pub(crate) fn normalize_enter_mode(raw: &str) -> &str {
     match raw.trim().to_lowercase().as_str() {
         "p" | "pane" => "p",
+        "o" | "origin" => "o",
         "w" | "window" => "w",
         "s" | "split" | "split-h" => "s",
         "v" | "split-v" => "v",
@@ -375,6 +376,7 @@ fn run_picker(cli: Cli) -> Result<()> {
     let sess_h = sess.clone();
     let sess_t = sess.clone();
     let sess_log = sess.clone();
+    let sess_o = sess.clone();
     let app = ui::AppConfig {
         hosts,
         store,
@@ -399,6 +401,7 @@ fn run_picker(cli: Cli) -> Result<()> {
         new_window: Arc::new(move |alias| sess_new.new_window(alias)),
         split_vert: Arc::new(move |alias| sess_v.split_vertical(alias)),
         split_horiz: Arc::new(move |alias| sess_h.split_horizontal(alias)),
+        respawn_origin: Arc::new(move |alias| sess_o.respawn_origin_pane(alias)),
         tiled: Arc::new(move |aliases, layout| sess_t.tiled(aliases, layout)),
         setup_logging: Arc::new(move |alias| sess_log.setup_pane_logging(alias)),
     };

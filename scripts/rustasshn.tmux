@@ -46,7 +46,20 @@ CMD_STR=""
 printf -v CMD_STR '%q ' "${CMD[@]}"
 
 if [[ "${LAUNCH_MODE}" == "popup" ]]; then
-  if tmux display-popup -E -w 90% -h 80% -- "${BIN_PATH}" "${BIN_ARGS[@]+${BIN_ARGS[@]}}"; then
+  ORIGIN_PANE="$(tmux display-message -p '#{pane_id}' || true)"
+  ORIGIN_PATH="$(tmux display-message -p '#{pane_current_path}' || true)"
+
+  POPUP_CMD=(
+    env
+    "RUSTASSHN_ORIGIN_PANE=${ORIGIN_PANE}"
+    "RUSTASSHN_ORIGIN_PATH=${ORIGIN_PATH}"
+    "${BIN_PATH}"
+  )
+  if [[ ${#BIN_ARGS[@]} -gt 0 ]]; then
+    POPUP_CMD+=("${BIN_ARGS[@]}")
+  fi
+
+  if tmux display-popup -E -w 90% -h 80% -- "${POPUP_CMD[@]}"; then
     exit 0
   fi
 fi

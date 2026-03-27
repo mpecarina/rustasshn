@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use tempfile::NamedTempFile;
 
 use crate::credentials;
 use crate::sshconfig;
@@ -224,12 +223,10 @@ fn run_connect(args: ConnectArgs) -> Result<()> {
         .unwrap_or_default();
 
     let user = host_users.get(&alias).cloned().unwrap_or_default();
-    let mut askpass = None;
+    let askpass_path = ensure_askpass_script()?;
     let mut cmd = if credentials::get(&alias, &user, "password").is_ok()
-        && let Ok(Some(script)) = create_askpass_script()
+        && let Some(script_path) = askpass_path.as_ref()
     {
-        let script_path = script.path().to_path_buf();
-        askpass = Some(script);
         let mut c = Command::new("ssh");
         c.arg("-o")
             .arg("PubkeyAuthentication=no")
@@ -250,7 +247,6 @@ fn run_connect(args: ConnectArgs) -> Result<()> {
 
     termio::sanitize_stdin_before_exec().ok();
     let status = cmd.status().with_context(|| format!("exec ssh {alias}"))?;
-    drop(askpass);
     exit_from_status(status)
 }
 
@@ -356,8 +352,7 @@ fn run_picker(cli: Cli) -> Result<()> {
         host_users.insert(h.alias.clone(), h.user.clone());
     }
 
-    let askpass = create_askpass_script()?;
-    let askpass_path = askpass.as_ref().map(|t| t.path().to_path_buf());
+    let askpass_path = ensure_askpass_script()?;
 
     let has_cred_map = host_users.clone();
     let has_cred = move |alias: &str| {
@@ -453,25 +448,36 @@ fn shell_quote(s: &str) -> String {
     out
 }
 
-fn create_askpass_script() -> Result<Option<NamedTempFile>> {
+fn ensure_askpass_script() -> Result<Option<std::path::PathBuf>> {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(_) => return Ok(None),
     };
-    let mut f = NamedTempFile::new()?;
+
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("resolve home"))?;
+    let dir = std::path::PathBuf::from(home)
+        .join(".config")
+        .join("rustasshn");
+    std::fs::create_dir_all(&dir).ok();
+
+    let path = dir.join("askpass.sh");
     let content = format!(
         "#!/usr/bin/env bash\nexec {} __askpass --host \"$TSSM_HOST\" --user \"$TSSM_USER\" --kind password\n",
         shell_quote(&exe.to_string_lossy())
     );
-    f.as_file_mut().write_all(content.as_bytes())?;
+    let write = match std::fs::read_to_string(&path) {
+        Ok(existing) => existing != content,
+        Err(_) => true,
+    };
+    if write {
+        std::fs::write(&path, content.as_bytes())?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perm = f.as_file().metadata()?.permissions();
-        perm.set_mode(0o700);
-        std::fs::set_permissions(f.path(), perm)?;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
     }
-    Ok(Some(f))
+    Ok(Some(path))
 }
 
 fn ssh_command_with_askpass(
@@ -517,9 +523,8 @@ fn run_ssh_passthrough(binary: &str, args: PassthroughArgs) -> Result<()> {
             &dest.host,
             &dest.user,
             host_users.get(&dest.host).map(|s| s.as_str()),
-        ) && let Some(askpass) = create_askpass_script()?
+        ) && let Some(script_path) = ensure_askpass_script()?.as_ref()
         {
-            let script_path = askpass.path().to_path_buf();
             let mut askpass_args: Vec<OsString> = vec![
                 OsString::from("-o"),
                 OsString::from("PubkeyAuthentication=no"),
@@ -531,12 +536,11 @@ fn run_ssh_passthrough(binary: &str, args: PassthroughArgs) -> Result<()> {
             cmd.args(&askpass_args);
             cmd.env("TSSM_HOST", &dest.host)
                 .env("TSSM_USER", user)
-                .env("SSH_ASKPASS", &script_path)
+                .env("SSH_ASKPASS", script_path)
                 .env("SSH_ASKPASS_REQUIRE", "force")
                 .env("DISPLAY", "1");
 
             let status = cmd.status()?;
-            drop(askpass);
             return exit_from_status(status);
         }
     }

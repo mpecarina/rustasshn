@@ -22,6 +22,13 @@ fi
 
 SHELL_BIN="${SHELL:-sh}"
 
+CMD=("${BIN_PATH}")
+if [[ ${#BIN_ARGS[@]} -gt 0 ]]; then
+  CMD+=("${BIN_ARGS[@]}")
+fi
+CMD_STR=""
+printf -v CMD_STR '%q ' "${CMD[@]}"
+
 if [[ ! -x "${BIN_PATH}" ]]; then
   tmux display-message -d 5000 "rustasshn: missing ${BIN_PATH} (plugin install incomplete)"
   exit 1
@@ -45,16 +52,16 @@ if [[ "${LAUNCH_MODE}" == "popup" ]]; then
 fi
 
 if [[ "${LAUNCH_MODE}" == "pane" ]]; then
-  # Open selector in a pane in the current window.
+  # Run selector in the current pane (replaces current process).
   # Keep the pane alive after rustasshn exits.
-  tmux split-window -v -p 40 -c "#{pane_current_path}" -- "${SHELL_BIN}" -lc "\"${BIN_PATH}\" ${BIN_ARGS[*]} ; exec \"${SHELL_BIN}\" -l"
+  tmux respawn-pane -k -c "#{pane_current_path}" -- "${SHELL_BIN}" -lc "${CMD_STR}; exec \"${SHELL_BIN}\" -l"
   exit 0
 fi
 
 if [[ "${LAUNCH_MODE}" == "window" ]]; then
-  tmux new-window -n "rustasshn" -- "${SHELL_BIN}" -lc "\"${BIN_PATH}\" ${BIN_ARGS[*]} ; exec \"${SHELL_BIN}\" -l"
+  tmux new-window -n "rustasshn" -- "${SHELL_BIN}" -lc "${CMD_STR}; exec \"${SHELL_BIN}\" -l"
   exit 0
 fi
 
 # Fallback
-tmux new-window -n "rustasshn" -- "${SHELL_BIN}" -lc "\"${BIN_PATH}\" ${BIN_ARGS[*]} ; exec \"${SHELL_BIN}\" -l"
+tmux new-window -n "rustasshn" -- "${SHELL_BIN}" -lc "${CMD_STR}; exec \"${SHELL_BIN}\" -l"

@@ -186,3 +186,8 @@ s() {
 
 - In the picker UI: press `c` to store a credential, `d` to delete.
 - From the CLI: `rustasshn cred set --host <alias> --user <user> --kind password`
+
+Credential storage backend:
+
+- macOS: stored in Keychain.
+- Linux: stored in the Freedesktop Secret Service keyring (GNOME Keyring / KWallet).

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 
 const SERVICE_PREFIX: &str = "rustasshn";
 
@@ -139,24 +139,113 @@ pub fn reveal(host: &str, user: &str, kind: &str) -> Result<String> {
     Ok(secret)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), not(target_os = "linux")))]
 pub fn set(_host: &str, _user: &str, _kind: &str) -> Result<()> {
-    bail!("credentials are only supported on macOS")
+    bail!("credentials are not supported on this platform")
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), not(target_os = "linux")))]
 pub fn get(_host: &str, _user: &str, _kind: &str) -> Result<()> {
-    bail!("credentials are only supported on macOS")
+    bail!("credentials are not supported on this platform")
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), not(target_os = "linux")))]
 pub fn delete(_host: &str, _user: &str, _kind: &str) -> Result<()> {
-    bail!("credentials are only supported on macOS")
+    bail!("credentials are not supported on this platform")
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), not(target_os = "linux")))]
 pub fn reveal(_host: &str, _user: &str, _kind: &str) -> Result<String> {
-    bail!("credentials are only supported on macOS")
+    bail!("credentials are not supported on this platform")
+}
+
+#[cfg(target_os = "linux")]
+fn keyring_entry(host: &str, user: &str, kind: &str) -> Result<keyring::Entry> {
+    let host = normalize_host(host)?;
+    let user = normalize_user(&host, user);
+    let kind = normalize_kind(kind);
+
+    let service = service_name(&host, &kind);
+    keyring::Entry::new(&service, &user).with_context(|| "open keyring entry")
+}
+
+#[cfg(target_os = "linux")]
+pub fn set(host: &str, user: &str, kind: &str) -> Result<()> {
+    let host = normalize_host(host)?;
+    let user = normalize_user(&host, user);
+    let kind = normalize_kind(kind);
+
+    let secret = prompt_secret(&format!(
+        "Enter {} for {}",
+        kind,
+        subject_label(&host, &user)
+    ))?;
+    if secret.trim().is_empty() {
+        bail!("empty secret refused");
+    }
+    keyring_entry(&host, &user, &kind)?
+        .set_password(&secret)
+        .with_context(|| "keyring write failed")?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn get(host: &str, user: &str, kind: &str) -> Result<()> {
+    let host = normalize_host(host)?;
+    let user = normalize_user(&host, user);
+    let kind = normalize_kind(kind);
+
+    keyring_entry(&host, &user, &kind)?
+        .get_password()
+        .map(|_| ())
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "credential not found for {}",
+                item_label(&host, &user, &kind)
+            )
+        })
+}
+
+#[cfg(target_os = "linux")]
+pub fn delete(host: &str, user: &str, kind: &str) -> Result<()> {
+    let host = normalize_host(host)?;
+    let user = normalize_user(&host, user);
+    let kind = normalize_kind(kind);
+
+    keyring_entry(&host, &user, &kind)?
+        .delete_password()
+        .with_context(|| "keyring delete failed")?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn reveal(host: &str, user: &str, kind: &str) -> Result<String> {
+    let host = normalize_host(host)?;
+    let user = normalize_user(&host, user);
+    let kind = normalize_kind(kind);
+
+    let secret = keyring_entry(&host, &user, &kind)?
+        .get_password()
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "credential not found for {}",
+                item_label(&host, &user, &kind)
+            )
+        })?;
+    if secret.trim().is_empty() {
+        bail!("empty credential for {}", item_label(&host, &user, &kind));
+    }
+    Ok(secret)
+}
+
+#[cfg(target_os = "linux")]
+fn subject_label(host: &str, user: &str) -> String {
+    let host = host.trim();
+    let user = user.trim();
+    if !user.is_empty() && user != host {
+        return format!("{}@{}", user, host);
+    }
+    host.to_string()
 }
 
 #[cfg(target_os = "macos")]
@@ -181,7 +270,6 @@ fn run_security(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-#[cfg(target_os = "macos")]
 fn prompt_secret(prompt: &str) -> Result<String> {
     let p = format!("{}: ", prompt);
     let s = rpassword::prompt_password(p).with_context(|| "read password")?;

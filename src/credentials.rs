@@ -213,7 +213,7 @@ pub fn delete(host: &str, user: &str, kind: &str) -> Result<()> {
     let kind = normalize_kind(kind);
 
     keyring_entry(&host, &user, &kind)?
-        .delete_password()
+        .delete_credential()
         .with_context(|| "keyring delete failed")?;
     Ok(())
 }
@@ -236,16 +236,6 @@ pub fn reveal(host: &str, user: &str, kind: &str) -> Result<String> {
         bail!("empty credential for {}", item_label(&host, &user, &kind));
     }
     Ok(secret)
-}
-
-#[cfg(target_os = "linux")]
-fn subject_label(host: &str, user: &str) -> String {
-    let host = host.trim();
-    let user = user.trim();
-    if !user.is_empty() && user != host {
-        return format!("{}@{}", user, host);
-    }
-    host.to_string()
 }
 
 #[cfg(target_os = "macos")]

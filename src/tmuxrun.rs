@@ -81,16 +81,18 @@ impl Session {
     }
 
     pub fn ssh_command_string(&self, alias: &str) -> String {
+        let sh = login_shell();
         if let (Some(script), Some(has)) = (&self.askpass_script, &self.has_credential)
             && has(alias)
         {
             let user = self.host_users.get(alias).cloned().unwrap_or_default();
             return format!(
-                "export TSSM_HOST={} TSSM_USER={} SSH_ASKPASS={} SSH_ASKPASS_REQUIRE=force DISPLAY=1; exec ssh -o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password {}",
+                "export TSSM_HOST={} TSSM_USER={} SSH_ASKPASS={} SSH_ASKPASS_REQUIRE=force DISPLAY=1; ssh -o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password {}; exec {} -l",
                 shell_quote(alias),
                 shell_quote(&user),
                 shell_quote(&script.to_string_lossy()),
-                shell_quote(alias)
+                shell_quote(alias),
+                shell_quote(&sh)
             );
         }
         ssh_command(alias)
@@ -264,7 +266,8 @@ impl Session {
 }
 
 pub fn ssh_command(alias: &str) -> String {
-    format!("exec ssh {}", shell_quote(alias))
+    let sh = login_shell();
+    format!("ssh {}; exec {} -l", shell_quote(alias), shell_quote(&sh))
 }
 
 fn login_shell() -> String {
@@ -360,17 +363,20 @@ mod tests {
 
     #[test]
     fn test_ssh_command_quotes_alias() {
-        assert_eq!(ssh_command("prod'box"), "exec ssh 'prod'\"'\"'box'");
+        assert_eq!(
+            ssh_command("prod'box"),
+            "ssh 'prod'\"'\"'box'; exec '/bin/zsh' -l"
+        );
     }
 
     #[test]
     fn test_ssh_command_simple_alias() {
-        assert_eq!(ssh_command("edge1"), "exec ssh 'edge1'");
+        assert_eq!(ssh_command("edge1"), "ssh 'edge1'; exec '/bin/zsh' -l");
     }
 
     #[test]
     fn test_ssh_command_empty_alias() {
-        assert_eq!(ssh_command(""), "exec ssh ''");
+        assert_eq!(ssh_command(""), "ssh ''; exec '/bin/zsh' -l");
     }
 
     #[test]

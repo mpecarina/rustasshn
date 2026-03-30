@@ -114,6 +114,8 @@ struct AskpassArgs {
     user: String,
     #[arg(long, default_value = "password")]
     kind: String,
+    #[arg(long, default_value = "")]
+    prompt: String,
 }
 
 #[derive(Args, Debug)]
@@ -335,12 +337,88 @@ fn subject(host: &str, user: &str) -> String {
 
 fn run_askpass(args: AskpassArgs) -> Result<()> {
     if args.host.trim().is_empty() {
-        bail!("usage: rustasshn __askpass --host <alias> [--user <user>] [--kind password]")
+        bail!(
+            "usage: rustasshn __askpass --host <alias> [--user <user>] [--kind password] [--prompt <prompt>]"
+        )
     }
-    let secret = credentials::reveal(&args.host, &args.user, &args.kind)?;
+
+    let mut host = args.host.trim().to_string();
+    let mut user = args.user.trim().to_string();
+    if let Some(t) = parse_askpass_prompt_target(&args.prompt) {
+        host = t.host;
+        user = t.user;
+    }
+
+    let secret = credentials::reveal(&host, &user, &args.kind)?;
     print!("{secret}");
     io::stdout().flush().ok();
     Ok(())
+}
+
+pub(crate) fn parse_askpass_prompt_target(prompt: &str) -> Option<SshCredentialTarget> {
+    let p = prompt.trim();
+    if p.is_empty() {
+        return None;
+    }
+
+    // OpenSSH typically calls SSH_ASKPASS with a prompt containing a token like:
+    // "user@host's password:". We try to extract the most plausible "user@host".
+    let bytes = p.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b != b'@' {
+            continue;
+        }
+
+        let mut l = i;
+        while l > 0 {
+            let c = bytes[l - 1];
+            if (c as char).is_ascii_alphanumeric() || c == b'.' || c == b'_' || c == b'-' {
+                l -= 1;
+            } else {
+                break;
+            }
+        }
+
+        let mut r = i + 1;
+        while r < bytes.len() {
+            let c = bytes[r];
+            if (c as char).is_ascii_alphanumeric()
+                || c == b'.'
+                || c == b'_'
+                || c == b'-'
+                || c == b':'
+                || c == b'['
+                || c == b']'
+                || c == b'%'
+            {
+                r += 1;
+            } else {
+                break;
+            }
+        }
+
+        if l >= i || r <= i + 1 {
+            continue;
+        }
+        let token = &p[l..r];
+        if token.starts_with('@') || token.ends_with('@') {
+            continue;
+        }
+        let (host, user) = host_and_user_from_destination(token);
+        if host.trim().is_empty() || user.trim().is_empty() {
+            continue;
+        }
+
+        let host = host
+            .trim()
+            .trim_end_matches(':')
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_string();
+        return Some(SshCredentialTarget { host, user });
+    }
+
+    None
 }
 
 fn run_picker(cli: Cli) -> Result<()> {
@@ -465,7 +543,7 @@ fn ensure_askpass_script() -> Result<Option<std::path::PathBuf>> {
 
     let path = dir.join("askpass.sh");
     let content = format!(
-        "#!/usr/bin/env bash\nexec {} __askpass --host \"$TSSM_HOST\" --user \"$TSSM_USER\" --kind password\n",
+        "#!/usr/bin/env bash\nexec {} __askpass --host \"$TSSM_HOST\" --user \"$TSSM_USER\" --kind password --prompt \"$1\"\n",
         shell_quote(&exe.to_string_lossy())
     );
     let write = match std::fs::read_to_string(&path) {

@@ -2,7 +2,9 @@
 mod tests {
     use std::ffi::OsString;
 
-    use crate::app::{extract_ssh_credential_target, normalize_enter_mode};
+    use crate::app::{
+        extract_ssh_credential_target, normalize_enter_mode, parse_askpass_prompt_target,
+    };
 
     #[test]
     fn test_normalize_enter_mode() {
@@ -86,5 +88,26 @@ mod tests {
         cmd.env("TSSM_USER", "root");
         assert!(cmd.get_envs().any(|(k, _)| k == "TSSM_HOST"));
         assert!(cmd.get_envs().any(|(k, _)| k == "TSSM_USER"));
+    }
+
+    #[test]
+    fn test_parse_askpass_prompt_target_user_at_host_password() {
+        let t = parse_askpass_prompt_target("alice@bastion's password:").unwrap();
+        assert_eq!(t.user, "alice");
+        assert_eq!(t.host, "bastion");
+    }
+
+    #[test]
+    fn test_parse_askpass_prompt_target_user_at_host_colon_password() {
+        let t = parse_askpass_prompt_target("bob@jump: Password:").unwrap();
+        assert_eq!(t.user, "bob");
+        assert_eq!(t.host, "jump");
+    }
+
+    #[test]
+    fn test_parse_askpass_prompt_target_bracketed_host() {
+        let t = parse_askpass_prompt_target("root@[10.0.0.10]'s password:").unwrap();
+        assert_eq!(t.user, "root");
+        assert_eq!(t.host, "10.0.0.10");
     }
 }

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -134,7 +134,10 @@ pub fn run(app: AppConfig) -> Result<()> {
             if status.success() {
                 Ok(())
             } else {
-                bail!("command failed")
+                eprintln!("command failed (exit status: {status})");
+                eprintln!("press Enter to continue");
+                pause_for_enter();
+                Ok(())
             }
         }
         Action::ExecWithPause {
@@ -144,7 +147,10 @@ pub fn run(app: AppConfig) -> Result<()> {
             termio::sanitize_stdin_before_exec().ok();
             let status = cmd.status()?;
             if !status.success() {
-                bail!("command failed")
+                eprintln!("command failed (exit status: {status})");
+                eprintln!("press Enter to continue");
+                pause_for_enter();
+                return Ok(());
             }
             eprintln!("{success_hint}");
             eprintln!("press Enter to continue");

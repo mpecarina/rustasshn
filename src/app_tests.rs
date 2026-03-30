@@ -110,4 +110,42 @@ mod tests {
         assert_eq!(t.user, "root");
         assert_eq!(t.host, "10.0.0.10");
     }
+
+    #[test]
+    fn test_normalize_prompt_host_strips_port() {
+        let got = super::super::app::normalize_prompt_host("[192.168.1.2]:2222");
+        assert_eq!(got, "192.168.1.2");
+        let got = super::super::app::normalize_prompt_host("jump:2222");
+        assert_eq!(got, "jump");
+    }
+
+    #[test]
+    fn test_resolve_prompt_host_prefers_env_alias_when_hostname_matches() {
+        let hosts = vec![
+            crate::sshconfig::Host {
+                alias: "dest".into(),
+                hostname: "192.168.126.4".into(),
+                user: "admin".into(),
+                port: 22,
+                proxyjump: "jump".into(),
+                identity_files: vec![],
+                source_path: "x".into(),
+                source_line: 1,
+            },
+            crate::sshconfig::Host {
+                alias: "jump".into(),
+                hostname: "10.0.0.1".into(),
+                user: "root".into(),
+                port: 22,
+                proxyjump: "".into(),
+                identity_files: vec![],
+                source_path: "x".into(),
+                source_line: 2,
+            },
+        ];
+
+        let got =
+            super::super::app::resolve_prompt_host_with_hosts("dest", "192.168.126.4", &hosts);
+        assert_eq!(got, "dest");
+    }
 }

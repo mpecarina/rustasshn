@@ -342,17 +342,98 @@ fn run_askpass(args: AskpassArgs) -> Result<()> {
         )
     }
 
-    let mut host = args.host.trim().to_string();
+    let env_host = args.host.trim().to_string();
+    let mut host = env_host.clone();
     let mut user = args.user.trim().to_string();
+
     if let Some(t) = parse_askpass_prompt_target(&args.prompt) {
-        host = t.host;
         user = t.user;
+        if let Ok(hosts) = sshconfig::load_default() {
+            host = resolve_prompt_host_with_hosts(&env_host, &t.host, &hosts);
+        } else {
+            host = t.host;
+        }
     }
 
-    let secret = credentials::reveal(&host, &user, &args.kind)?;
-    print!("{secret}");
+    match credentials::reveal(&host, &user, &args.kind) {
+        Ok(secret) => {
+            print!("{secret}");
+        }
+        Err(e) => {
+            // Avoid spamming stderr during ssh retry loops unless explicitly requested.
+            if std::env::var("RUSTASSHN_ASKPASS_DEBUG")
+                .ok()
+                .map(|v| !v.trim().is_empty() && v.trim() != "0")
+                .unwrap_or(false)
+            {
+                eprintln!("{e}");
+            }
+        }
+    }
     io::stdout().flush().ok();
     Ok(())
+}
+
+pub(crate) fn normalize_prompt_host(host: &str) -> String {
+    let mut h = host
+        .trim()
+        .trim_end_matches(':')
+        .to_string();
+
+    if let Some((left, right)) = h.rsplit_once(':')
+        && !left.contains(':')
+        && !left.is_empty()
+        && !right.is_empty()
+        && right.bytes().all(|b| b.is_ascii_digit())
+    {
+        h = left.to_string();
+    }
+
+    h = h
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    h
+}
+
+pub(crate) fn resolve_prompt_host_with_hosts(
+    env_host: &str,
+    prompt_host: &str,
+    hosts: &[sshconfig::Host],
+) -> String {
+    let env_host = env_host.trim();
+    let ph = normalize_prompt_host(prompt_host);
+    if ph.is_empty() {
+        return env_host.to_string();
+    }
+    if ph == env_host {
+        return env_host.to_string();
+    }
+
+    if let Some(env_entry) = hosts.iter().find(|h| h.alias == env_host) {
+        if !env_entry.hostname.trim().is_empty() && env_entry.hostname.trim() == ph {
+            return env_host.to_string();
+        }
+    }
+
+    if hosts.iter().any(|h| h.alias == ph) {
+        return ph;
+    }
+
+    let mut matches = hosts.iter().filter(|h| h.hostname.trim() == ph).map(|h| h.alias.as_str());
+    let first = matches.next();
+    if first.is_none() {
+        return ph;
+    }
+
+    let mut best = first.unwrap().to_string();
+    for a in matches {
+        if a == env_host {
+            best = env_host.to_string();
+            break;
+        }
+    }
+    best
 }
 
 pub(crate) fn parse_askpass_prompt_target(prompt: &str) -> Option<SshCredentialTarget> {

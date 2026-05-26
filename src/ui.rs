@@ -50,10 +50,10 @@ pub struct AppConfig {
 struct Candidate {
     host: sshconfig::Host,
     alias_lc: String,
-    hostname_lc: String,
-    proxyjump_lc: String,
+    hostname_core_lc: String,
+    proxyjump_core_lc: String,
+    search_core_lc: String,
     search_all_lc: String,
-    line: String,
 }
 
 #[derive(Default)]
@@ -826,15 +826,16 @@ impl Model {
             } else {
                 " "
             };
-            let mut line = Line::from(vec![
+            let mut spans = vec![
                 Span::raw(prefix),
                 Span::raw("["),
                 Span::raw(sel),
                 Span::raw("] "),
                 Span::styled(star, Style::default().fg(Color::Yellow)),
                 Span::raw(" "),
-                Span::raw(c.line.clone()),
-            ]);
+            ];
+            spans.extend(render_candidate_line(c, &self.search));
+            let mut line = Line::from(spans);
             if i == self.selected {
                 line = line.style(Style::default().fg(Color::White).bg(Color::Blue));
             }
@@ -966,34 +967,114 @@ impl Model {
 fn build_candidates(hosts: &[sshconfig::Host]) -> Vec<Candidate> {
     let mut out = Vec::new();
     for h in hosts {
-        let mut parts = vec![h.alias.clone()];
-        if !h.user.is_empty() {
-            parts.push(format!("as {}", h.user));
-        }
-        if h.port > 0 && h.port != 22 {
-            parts.push(format!(":{}", h.port));
-        }
-        if !h.proxyjump.is_empty() {
-            parts.push(format!("via {}", h.proxyjump));
-        }
-        if !h.hostname.is_empty() && h.hostname != h.alias {
-            parts.push(format!("-> {}", h.hostname));
-        }
         let alias_lc = h.alias.to_lowercase();
-        let hostname_lc = h.hostname.to_lowercase();
-        let proxyjump_lc = h.proxyjump.to_lowercase();
+        let hostname_core_lc = normalized_search_text(&h.hostname);
+        let proxyjump_core_lc = normalized_search_text(&h.proxyjump);
+        let search_core_lc = format!(
+            "{} {} {} {}",
+            normalized_search_text(&h.alias),
+            hostname_core_lc.clone(),
+            normalized_search_text(&h.user),
+            proxyjump_core_lc.clone()
+        );
         let search_all_lc =
             format!("{} {} {} {}", h.alias, h.hostname, h.user, h.proxyjump).to_lowercase();
         out.push(Candidate {
             host: h.clone(),
             alias_lc,
-            hostname_lc,
-            proxyjump_lc,
+            hostname_core_lc,
+            proxyjump_core_lc,
+            search_core_lc,
             search_all_lc,
-            line: parts.join(" "),
         });
     }
     out
+}
+
+fn render_candidate_line(c: &Candidate, query: &str) -> Vec<Span<'static>> {
+    let query_lc = query.trim().to_lowercase();
+    let terms = split_query_terms(&query_lc);
+    let mut spans = highlight_text(&c.host.alias, &terms);
+
+    if !c.host.user.is_empty() {
+        spans.push(Span::raw(" as "));
+        spans.extend(highlight_text(&c.host.user, &terms));
+    }
+    if c.host.port > 0 && c.host.port != 22 {
+        spans.push(Span::raw(format!(":{}", c.host.port)));
+    }
+    if !c.host.proxyjump.is_empty() {
+        spans.push(Span::raw(" via "));
+        spans.extend(highlight_text(&c.host.proxyjump, &terms));
+    }
+    if !c.host.hostname.is_empty() && c.host.hostname != c.host.alias {
+        spans.push(Span::raw(" -> "));
+        spans.extend(highlight_text(&c.host.hostname, &terms));
+    }
+
+    spans
+}
+
+fn highlight_text(text: &str, terms: &[&str]) -> Vec<Span<'static>> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+
+    let mut flags = vec![false; text.len()];
+    for term in terms {
+        if term.is_empty() {
+            continue;
+        }
+        mark_highlight_matches(text, term, &mut flags);
+    }
+
+    let mut spans = Vec::new();
+    let mut start = 0usize;
+    while start < text.len() {
+        let highlighted = flags[start];
+        let mut end = start + 1;
+        while end < text.len() && flags[end] == highlighted {
+            end += 1;
+        }
+        let chunk = text[start..end].to_string();
+        if highlighted {
+            spans.push(Span::styled(
+                chunk,
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::raw(chunk));
+        }
+        start = end;
+    }
+    spans
+}
+
+fn mark_highlight_matches(text: &str, term: &str, flags: &mut [bool]) {
+    let lower = text.to_lowercase();
+
+    let mut search_from = 0usize;
+    while search_from <= lower.len() {
+        let Some(found) = lower[search_from..].find(term) else {
+            break;
+        };
+        let start = search_from + found;
+        let end = start + term.len();
+        for flag in &mut flags[start..end] {
+            *flag = true;
+        }
+        search_from = start + 1;
+    }
+
+    for token in collect_match_tokens(&lower) {
+        if token_matches_query(token.text, term) {
+            let start = usize::from(token.pos);
+            let end = start + token.text.len();
+            for flag in &mut flags[start..end] {
+                *flag = true;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1017,7 +1098,8 @@ impl PartialOrd for MatchSortKey {
 
 fn match_sort_key(query: &str, c: &Candidate) -> Option<MatchSortKey> {
     // bucket priority: alias prefix, hostname prefix, alias token prefix, hostname token prefix,
-    // alias fuzzy, hostname fuzzy, proxyjump matches, any fuzzy.
+    // alias ordered token match, alias fuzzy, hostname fuzzy, proxyjump matches,
+    // normalized full-text token match, normalized full-text fuzzy, raw full-text fuzzy.
 
     let q = query.trim();
     if q.is_empty() {
@@ -1028,6 +1110,8 @@ fn match_sort_key(query: &str, c: &Candidate) -> Option<MatchSortKey> {
         });
     }
 
+    let terms = split_query_terms(q);
+
     if c.alias_lc.starts_with(q) {
         return Some(MatchSortKey {
             bucket: 0,
@@ -1035,73 +1119,215 @@ fn match_sort_key(query: &str, c: &Candidate) -> Option<MatchSortKey> {
             len: c.alias_lc.len().min(u16::MAX as usize) as u16,
         });
     }
-    if !c.hostname_lc.is_empty() && c.hostname_lc.starts_with(q) {
+    if !c.hostname_core_lc.is_empty() && c.hostname_core_lc.starts_with(q) {
         return Some(MatchSortKey {
             bucket: 1,
             position: 0,
-            len: c.hostname_lc.len().min(u16::MAX as usize) as u16,
+            len: c.hostname_core_lc.len().min(u16::MAX as usize) as u16,
         });
     }
 
-    if let Some(pos) = token_prefix_pos(&c.alias_lc, q) {
+    if let Some(pos) = all_term_match_pos(&terms, |term| token_prefix_pos(&c.alias_lc, term)) {
         return Some(MatchSortKey {
             bucket: 2,
             position: pos,
             len: c.alias_lc.len().min(u16::MAX as usize) as u16,
         });
     }
-    if let Some(pos) = token_prefix_pos(&c.hostname_lc, q) {
+    if let Some(pos) = all_term_match_pos(&terms, |term| token_prefix_pos(&c.hostname_core_lc, term)) {
         return Some(MatchSortKey {
             bucket: 3,
             position: pos,
-            len: c.hostname_lc.len().min(u16::MAX as usize) as u16,
+            len: c.hostname_core_lc.len().min(u16::MAX as usize) as u16,
         });
     }
 
-    if let Some(pos) = fuzzy_match_pos(q, &c.alias_lc) {
+    if let Some(pos) = ordered_token_match_pos(&c.alias_lc, &terms) {
         return Some(MatchSortKey {
             bucket: 4,
             position: pos,
             len: c.alias_lc.len().min(u16::MAX as usize) as u16,
         });
     }
-    if let Some(pos) = fuzzy_match_pos(q, &c.hostname_lc) {
+
+    if let Some(pos) = all_term_match_pos(&terms, |term| fuzzy_match_pos(term, &c.alias_lc)) {
         return Some(MatchSortKey {
             bucket: 5,
             position: pos,
-            len: c.hostname_lc.len().min(u16::MAX as usize) as u16,
+            len: c.alias_lc.len().min(u16::MAX as usize) as u16,
+        });
+    }
+    if let Some(pos) = all_term_match_pos(&terms, |term| fuzzy_match_pos(term, &c.hostname_core_lc)) {
+        return Some(MatchSortKey {
+            bucket: 6,
+            position: pos,
+            len: c.hostname_core_lc.len().min(u16::MAX as usize) as u16,
         });
     }
 
-    if !c.proxyjump_lc.is_empty() {
-        if c.proxyjump_lc.starts_with(q) {
+    if !c.proxyjump_core_lc.is_empty() {
+        if c.proxyjump_core_lc.starts_with(q) {
             return Some(MatchSortKey {
-                bucket: 6,
+                bucket: 7,
                 position: 0,
-                len: c.proxyjump_lc.len().min(u16::MAX as usize) as u16,
+                len: c.proxyjump_core_lc.len().min(u16::MAX as usize) as u16,
             });
         }
-        if let Some(pos) = token_prefix_pos(&c.proxyjump_lc, q) {
+        if let Some(pos) = all_term_match_pos(&terms, |term| token_prefix_pos(&c.proxyjump_core_lc, term)) {
             return Some(MatchSortKey {
-                bucket: 6,
+                bucket: 7,
                 position: pos,
-                len: c.proxyjump_lc.len().min(u16::MAX as usize) as u16,
+                len: c.proxyjump_core_lc.len().min(u16::MAX as usize) as u16,
             });
         }
-        if let Some(pos) = fuzzy_match_pos(q, &c.proxyjump_lc) {
+        if let Some(pos) = all_term_match_pos(&terms, |term| fuzzy_match_pos(term, &c.proxyjump_core_lc)) {
             return Some(MatchSortKey {
-                bucket: 6,
+                bucket: 7,
                 position: pos,
-                len: c.proxyjump_lc.len().min(u16::MAX as usize) as u16,
+                len: c.proxyjump_core_lc.len().min(u16::MAX as usize) as u16,
             });
         }
     }
 
-    fuzzy_match_pos(q, &c.search_all_lc).map(|pos| MatchSortKey {
-        bucket: 7,
+    if let Some(pos) = all_term_match_pos(&terms, |term| token_prefix_pos(&c.search_core_lc, term)) {
+        return Some(MatchSortKey {
+            bucket: 8,
+            position: pos,
+            len: c.alias_lc.len().min(u16::MAX as usize) as u16,
+        });
+    }
+
+    if let Some(pos) = all_term_match_pos(&terms, |term| fuzzy_match_pos(term, &c.search_core_lc)) {
+        return Some(MatchSortKey {
+            bucket: 9,
+            position: pos,
+            len: c.alias_lc.len().min(u16::MAX as usize) as u16,
+        });
+    }
+
+    all_term_match_pos(&terms, |term| fuzzy_match_pos(term, &c.search_all_lc)).map(|pos| MatchSortKey {
+        bucket: 10,
         position: pos,
         len: c.alias_lc.len().min(u16::MAX as usize) as u16,
     })
+}
+
+fn normalized_search_text(text: &str) -> String {
+    text.split_whitespace()
+        .map(normalize_search_token)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_search_token(token: &str) -> String {
+    let lower = token.to_lowercase();
+    let mut trimmed = lower.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '.');
+    while let Some(next) = strip_domain_suffix(trimmed) {
+        trimmed = next;
+    }
+    trimmed.to_string()
+}
+
+fn strip_domain_suffix(token: &str) -> Option<&str> {
+    let dot = token.rfind('.')?;
+    let suffix = &token[dot + 1..];
+    if suffix.is_empty() || !suffix.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let head = &token[..dot];
+    if head.is_empty() || !head.chars().any(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(head)
+}
+
+fn split_query_terms(query: &str) -> Vec<&str> {
+    query.split_whitespace().filter(|term| !term.is_empty()).collect()
+}
+
+fn all_term_match_pos(terms: &[&str], mut matcher: impl FnMut(&str) -> Option<u16>) -> Option<u16> {
+    let mut total = 0u32;
+    for term in terms {
+        total += u32::from(matcher(term)?);
+    }
+    Some(total.min(u32::from(u16::MAX)) as u16)
+}
+
+fn ordered_token_match_pos(text: &str, terms: &[&str]) -> Option<u16> {
+    if terms.is_empty() {
+        return Some(0);
+    }
+
+    let tokens = collect_match_tokens(text);
+    let mut total = 0u32;
+    let mut start = 0usize;
+    for term in terms {
+        let next = tokens[start..]
+            .iter()
+            .position(|token| token_matches_query(token.text, term))?;
+        let token = &tokens[start + next];
+        total += u32::from(token.pos);
+        start += next + 1;
+    }
+    Some(total.min(u32::from(u16::MAX)) as u16)
+}
+
+struct MatchToken<'a> {
+    text: &'a str,
+    pos: u16,
+}
+
+fn collect_match_tokens(text: &str) -> Vec<MatchToken<'_>> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        while i < bytes.len() && !bytes[i].is_ascii_alphanumeric() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+
+        let start = i;
+        while i < bytes.len() && bytes[i].is_ascii_alphanumeric() {
+            i += 1;
+        }
+        let end = i;
+        out.push(MatchToken {
+            text: &text[start..end],
+            pos: start.min(u16::MAX as usize) as u16,
+        });
+
+        let mut part_start = start;
+        while part_start < end {
+            let part_is_digit = bytes[part_start].is_ascii_digit();
+            let mut part_end = part_start + 1;
+            while part_end < end && bytes[part_end].is_ascii_digit() == part_is_digit {
+                part_end += 1;
+            }
+            if part_start != start || part_end != end {
+                out.push(MatchToken {
+                    text: &text[part_start..part_end],
+                    pos: part_start.min(u16::MAX as usize) as u16,
+                });
+            }
+            part_start = part_end;
+        }
+    }
+
+    out
+}
+
+fn token_matches_query(token: &str, query: &str) -> bool {
+    if query.is_empty() {
+        return false;
+    }
+    if query.bytes().all(|b| b.is_ascii_digit()) {
+        return token == query;
+    }
+    token.starts_with(query)
 }
 
 fn token_prefix_pos(text: &str, q: &str) -> Option<u16> {
@@ -1190,5 +1416,174 @@ mod tests {
         let k1 = match_sort_key(q, &c_alias).unwrap();
         let k2 = match_sort_key(q, &c_proxy).unwrap();
         assert!(k1.bucket < k2.bucket);
+    }
+
+    #[test]
+    fn test_match_sort_key_matches_space_separated_alias_terms() {
+        let h = sshconfig::Host {
+            alias: "vmlab-dev4-leaf-sw1".to_string(),
+            hostname: "192.168.126.4".to_string(),
+            user: "admin".to_string(),
+            port: 22,
+            proxyjump: "narrs-dev4.lmig.com".to_string(),
+            identity_files: Vec::new(),
+            source_path: "".to_string(),
+            source_line: 1,
+        };
+        let candidate = build_candidates(&[h])[0].clone();
+
+        let key = match_sort_key("vmlab dev4 leaf", &candidate).unwrap();
+        assert_eq!(key.bucket, 2);
+    }
+
+    #[test]
+    fn test_match_sort_key_matches_terms_across_searchable_fields() {
+        let h = sshconfig::Host {
+            alias: "leaf-sw1".to_string(),
+            hostname: "192.168.126.4".to_string(),
+            user: "admin".to_string(),
+            port: 22,
+            proxyjump: "narrs-dev4.lmig.com".to_string(),
+            identity_files: Vec::new(),
+            source_path: "".to_string(),
+            source_line: 1,
+        };
+        let candidate = build_candidates(&[h])[0].clone();
+
+        let key = match_sort_key("dev4 leaf", &candidate).unwrap();
+        assert_eq!(key.bucket, 8);
+    }
+
+    #[test]
+    fn test_match_sort_key_prefers_exact_numeric_token_after_leaf() {
+        let h4 = sshconfig::Host {
+            alias: "vmlab-dev4-leaf-sw4".to_string(),
+            hostname: "192.168.126.7".to_string(),
+            user: "admin".to_string(),
+            port: 22,
+            proxyjump: "narrs-dev4.lmig.com".to_string(),
+            identity_files: Vec::new(),
+            source_path: "".to_string(),
+            source_line: 1,
+        };
+        let h1 = sshconfig::Host {
+            alias: "vmlab-dev4-leaf-sw1".to_string(),
+            hostname: "192.168.126.4".to_string(),
+            user: "admin".to_string(),
+            port: 22,
+            proxyjump: "narrs-dev4.lmig.com".to_string(),
+            identity_files: Vec::new(),
+            source_path: "".to_string(),
+            source_line: 2,
+        };
+
+        let candidates = build_candidates(&[h4, h1]);
+        let k4 = match_sort_key("leaf 4", &candidates[0]).unwrap();
+        let k1 = match_sort_key("leaf 4", &candidates[1]).unwrap();
+        assert!(k4 < k1);
+    }
+
+    #[test]
+    fn test_match_sort_key_prefers_exact_numeric_token_over_prefix() {
+        let h2 = sshconfig::Host {
+            alias: "vmlab-dev4-leaf-sw2".to_string(),
+            hostname: "192.168.126.5".to_string(),
+            user: "admin".to_string(),
+            port: 22,
+            proxyjump: "narrs-dev4.lmig.com".to_string(),
+            identity_files: Vec::new(),
+            source_path: "".to_string(),
+            source_line: 1,
+        };
+        let h12 = sshconfig::Host {
+            alias: "vmlab-dev4-leaf-sw12".to_string(),
+            hostname: "192.168.126.15".to_string(),
+            user: "admin".to_string(),
+            port: 22,
+            proxyjump: "narrs-dev4.lmig.com".to_string(),
+            identity_files: Vec::new(),
+            source_path: "".to_string(),
+            source_line: 2,
+        };
+
+        let candidates = build_candidates(&[h2, h12]);
+        let k2 = match_sort_key("dev4 leaf 2", &candidates[0]).unwrap();
+        let k12 = match_sort_key("dev4 leaf 2", &candidates[1]).unwrap();
+        assert!(k2 < k12);
+    }
+
+    #[test]
+    fn test_normalize_search_token_strips_common_domain_suffixes() {
+        assert_eq!(normalize_search_token("narrs-dev4.lmig.com"), "narrs-dev4");
+        assert_eq!(normalize_search_token("vmpip-u56cfp5n.lm.lmig.com"), "vmpip-u56cfp5n");
+        assert_eq!(normalize_search_token("192.168.126.4"), "192.168.126.4");
+    }
+
+    #[test]
+    fn test_match_sort_key_prefers_core_text_before_raw_domain_text() {
+        let h_core = sshconfig::Host {
+            alias: "leaf-sw1".to_string(),
+            hostname: "10.0.0.1".to_string(),
+            user: "admin".to_string(),
+            port: 22,
+            proxyjump: "narrs-dev4.lmig.com".to_string(),
+            identity_files: Vec::new(),
+            source_path: "".to_string(),
+            source_line: 1,
+        };
+        let h_raw = sshconfig::Host {
+            alias: "com-backup-leaf".to_string(),
+            hostname: "10.0.0.2".to_string(),
+            user: "admin".to_string(),
+            port: 22,
+            proxyjump: "jump".to_string(),
+            identity_files: Vec::new(),
+            source_path: "".to_string(),
+            source_line: 2,
+        };
+
+        let candidates = build_candidates(&[h_core, h_raw]);
+        let k_core = match_sort_key("com", &candidates[0]).unwrap();
+        let k_raw = match_sort_key("com", &candidates[1]).unwrap();
+        assert!(k_raw < k_core);
+
+        let k_narrs = match_sort_key("narrs-dev4", &candidates[0]).unwrap();
+        assert_eq!(k_narrs.bucket, 7);
+    }
+
+    #[test]
+    fn test_highlight_text_marks_dashed_alias_terms() {
+        let spans = highlight_text("vmlab-dev4-leaf-sw1", &["vmlab", "dev4", "leaf"]);
+        let highlighted: Vec<String> = spans
+            .into_iter()
+            .filter(|span| span.style.fg == Some(Color::Cyan))
+            .map(|span| span.content.into_owned())
+            .collect();
+        assert_eq!(highlighted, vec!["vmlab", "dev4", "leaf"]);
+    }
+
+    #[test]
+    fn test_render_candidate_line_highlights_proxyjump_and_alias_terms() {
+        let h = sshconfig::Host {
+            alias: "leaf-sw1".to_string(),
+            hostname: "192.168.126.4".to_string(),
+            user: "admin".to_string(),
+            port: 22,
+            proxyjump: "narrs-dev4.lmig.com".to_string(),
+            identity_files: Vec::new(),
+            source_path: "".to_string(),
+            source_line: 1,
+        };
+        let candidate = build_candidates(&[h])[0].clone();
+
+        let spans = render_candidate_line(&candidate, "dev4 leaf");
+        let highlighted: Vec<String> = spans
+            .into_iter()
+            .filter(|span| span.style.fg == Some(Color::Cyan))
+            .map(|span| span.content.into_owned())
+            .collect();
+
+        assert!(highlighted.iter().any(|part| part.contains("leaf")));
+        assert!(highlighted.iter().any(|part| part.contains("dev4")));
     }
 }

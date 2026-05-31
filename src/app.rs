@@ -120,7 +120,7 @@ struct AskpassArgs {
 
 #[derive(Args, Debug)]
 struct PassthroughArgs {
-    #[arg(trailing_var_arg = true)]
+    #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
     args: Vec<OsString>,
 }
 
@@ -848,5 +848,37 @@ fn exit_from_status(status: ExitStatus) -> Result<()> {
             }
         }
         bail!("command failed")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use clap::Parser;
+
+    use super::{Cli, Cmd};
+
+    #[test]
+    fn test_scp_passthrough_accepts_recursive_flag_without_double_dash() {
+        let cli = Cli::try_parse_from([
+            "rustasshn",
+            "scp",
+            "-r",
+            "../2026_06_01",
+            "192.168.0.160:/Users/mattp/Desktop/",
+        ])
+        .unwrap();
+
+        let Some(Cmd::Scp(args)) = cli.cmd else {
+            panic!("expected scp subcommand");
+        };
+
+        assert_eq!(args.args[0], OsString::from("-r"));
+        assert_eq!(args.args[1], OsString::from("../2026_06_01"));
+        assert_eq!(
+            args.args[2],
+            OsString::from("192.168.0.160:/Users/mattp/Desktop/")
+        );
     }
 }

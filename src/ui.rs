@@ -20,6 +20,8 @@ use crate::sshconfig;
 use crate::state;
 use crate::termio;
 
+const LIST_PAGE_HEIGHT: usize = 12;
+
 pub type ConnectFn = Arc<dyn Fn(&str, bool) -> Command + Send + Sync>;
 pub type ActionFn = Arc<dyn Fn(&str) -> Result<()> + Send + Sync>;
 pub type TiledFn = Arc<dyn Fn(&[String], &str) -> Result<()> + Send + Sync>;
@@ -271,7 +273,7 @@ impl Model {
     }
 
     fn ensure_visible(&mut self) {
-        let height = 12usize; // ratatui gets actual height in draw; keep stable for scrolling.
+        let height = LIST_PAGE_HEIGHT; // ratatui gets actual height in draw; keep stable for scrolling.
         if self.selected < self.scroll {
             self.scroll = self.selected;
         }
@@ -334,6 +336,14 @@ impl Model {
                 self.move_sel(1);
                 return Ok(None);
             }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                self.move_page(-1);
+                return Ok(None);
+            }
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                self.move_page(1);
+                return Ok(None);
+            }
             (KeyCode::Enter, _) => {
                 if self.app.implicit_select {
                     self.search_focused = false;
@@ -379,6 +389,16 @@ impl Model {
             }
             (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
                 self.move_sel(1);
+                self.pending_g = false;
+                return Ok(None);
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                self.move_page(-1);
+                self.pending_g = false;
+                return Ok(None);
+            }
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                self.move_page(1);
                 self.pending_g = false;
                 return Ok(None);
             }
@@ -760,6 +780,10 @@ impl Model {
         }
         self.selected = next as usize;
         self.ensure_visible();
+    }
+
+    fn move_page(&mut self, pages: i32) {
+        self.move_sel(pages.saturating_mul(LIST_PAGE_HEIGHT as i32));
     }
 
     fn toggle_select_all_filtered(&mut self) {
@@ -1379,6 +1403,73 @@ fn fuzzy_match_pos(query: &str, text: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn test_app_config(host_count: usize) -> AppConfig {
+        let hosts = (0..host_count)
+            .map(|idx| sshconfig::Host {
+                alias: format!("host-{idx}"),
+                hostname: format!("10.0.0.{idx}"),
+                user: "tester".to_string(),
+                port: 22,
+                proxyjump: String::new(),
+                identity_files: Vec::new(),
+                source_path: String::new(),
+                source_line: idx + 1,
+            })
+            .collect();
+
+        AppConfig {
+            hosts,
+            store: state::Store::default(),
+            state_path: PathBuf::new(),
+            start_in_search: false,
+            implicit_select: false,
+            enter_mode: "p".to_string(),
+            in_tmux: || false,
+            add_host: |_| Ok(()),
+            exec_credential: |_, _, _, _| Ok(Command::new("true")),
+            connect_in_pane: Arc::new(|_, _| Command::new("true")),
+            new_window: Arc::new(|_| Ok(())),
+            split_vert: Arc::new(|_| Ok(())),
+            split_horiz: Arc::new(|_| Ok(())),
+            respawn_origin: Arc::new(|_| Ok(())),
+            tiled: Arc::new(|_, _| Ok(())),
+            setup_logging: Arc::new(|_| {}),
+        }
+    }
+
+    #[test]
+    fn test_ctrl_d_and_ctrl_u_page_through_hosts() {
+        let mut model = Model::new(test_app_config(40));
+
+        let _ = model
+            .handle_normal_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert_eq!(model.selected, LIST_PAGE_HEIGHT);
+
+        let _ = model
+            .handle_normal_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert_eq!(model.selected, 0);
+    }
+
+    #[test]
+    fn test_ctrl_d_and_ctrl_u_work_while_search_is_focused() {
+        let mut model = Model::new(test_app_config(40));
+        model.search_focused = true;
+
+        let _ = model
+            .handle_search_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert_eq!(model.selected, LIST_PAGE_HEIGHT);
+
+        let _ = model
+            .handle_search_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert_eq!(model.selected, 0);
+    }
 
     #[test]
     fn test_fuzzy_match_pos() {

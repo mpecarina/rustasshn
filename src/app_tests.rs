@@ -3,15 +3,13 @@ mod tests {
     use std::ffi::OsString;
 
     use crate::app::{
-        extract_ssh_credential_target, normalize_enter_mode, parse_askpass_prompt_target,
+        DEFAULT_ENTER_MODE, extract_ssh_credential_target, normalize_enter_mode,
+        parse_askpass_prompt_target,
     };
 
     #[test]
     fn test_normalize_enter_mode() {
         let cases = [
-            ("p", "p"),
-            ("pane", "p"),
-            ("P", "p"),
             ("o", "o"),
             ("origin", "o"),
             ("O", "o"),
@@ -22,12 +20,24 @@ mod tests {
             ("split-h", "s"),
             ("v", "v"),
             ("split-v", "v"),
-            ("", "p"),
-            ("junk", "p"),
         ];
         for (i, w) in cases {
             assert_eq!(normalize_enter_mode(i), w);
         }
+    }
+
+    #[test]
+    fn test_unknown_enter_mode_falls_back_to_default() {
+        for i in ["", "  ", "junk", "p"] {
+            assert_eq!(normalize_enter_mode(i), DEFAULT_ENTER_MODE);
+        }
+    }
+
+    /// Whatever the default is, it must be a mode that spawns a real tmux pane.
+    #[test]
+    fn test_default_enter_mode_is_a_pane_spawning_mode() {
+        assert!(matches!(DEFAULT_ENTER_MODE, "o" | "w" | "v" | "s"));
+        assert_eq!(normalize_enter_mode(DEFAULT_ENTER_MODE), DEFAULT_ENTER_MODE);
     }
 
     #[test]

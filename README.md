@@ -12,7 +12,7 @@ set -g @plugin 'mpecarina/rustasshn'
 # optional
 set -g @rustasshn_key 's'
 set -g @rustasshn_launch_mode 'popup'
-set -g @rustasshn_enter_mode 'p'
+set -g @rustasshn_enter_mode 'o'
 
 run '~/.tmux/plugins/tpm/tpm'
 ```
@@ -64,7 +64,6 @@ Inside the picker:
 
 - `Enter` uses `@rustasshn_enter_mode`
 - `Esc` leaves search mode (or quits if already in command mode)
-- `p` connects in the current pane (the pane running the picker)
 - `w` opens in a new tmux window
 - `v` opens in a vertical split
 - `s` opens in a horizontal split
@@ -94,8 +93,9 @@ set -g @rustasshn_mode 'search'
 set -g @rustasshn_implicit_select 'true'
 
 
-# what Enter does in the picker: p|pane, w|window, v|split-v, s|split-h, o|origin
-set -g @rustasshn_enter_mode 'p'
+# what Enter does in the picker: o|origin, w|window, v|split-v, s|split-h
+# every mode opens the session in a real tmux pane; default is 'o'
+set -g @rustasshn_enter_mode 'o'
 ```
 
 ### Search Mode vs Normal Mode
@@ -112,19 +112,34 @@ Notes:
   - when `true`: `Enter` exits search and immediately runs the configured `@rustasshn_enter_mode`
   - when `false`: `Enter` only exits search; press `Enter` again in command mode to run
 
+## Requires tmux
+
+The picker only runs inside tmux, and every connect mode opens the session in a
+real tmux pane. That is deliberate: a pane is what makes session logging work,
+and it keeps a remote that dies mid-escape-sequence from damaging your terminal
+directly. To connect without tmux, use the CLI instead: `rustasshn connect
+<alias>`, or `rustasshn ssh ...` / `rustasshn scp ...`.
+
 ## Popup + Origin Mode
 
-If you launch the picker as a tmux popup, the default `p`/`pane` enter mode will
-connect inside the popup pane.
-
-To pick hosts in a popup but connect in the pane that spawned the popup:
+`origin` is the default: you pick a host in a popup and the session opens in the
+pane that spawned the popup, so it lands where you were working.
 
 ```tmux
 set -g @rustasshn_launch_mode "popup"
 set -g @rustasshn_enter_mode 'o'
 ```
 
-`origin` falls back to the current behavior when the origin pane is not known
+Because this respawns that pane, it kills whatever was running there. If you
+would rather leave your current pane alone, use one of:
+
+```tmux
+set -g @rustasshn_enter_mode 'w'   # new window
+set -g @rustasshn_enter_mode 'v'   # vertical split
+set -g @rustasshn_enter_mode 's'   # horizontal split
+```
+
+`origin` falls back to the current pane when the origin pane is not known
 (for example when not launched via popup).
 
 ## Example Config (Matches My Setup)

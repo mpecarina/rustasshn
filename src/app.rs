@@ -12,6 +12,7 @@ use crate::sshconfig;
 use crate::state;
 use crate::termio;
 use crate::tmuxrun;
+use crate::tty;
 use crate::ui;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -30,7 +31,7 @@ struct Cli {
     #[arg(long, default_value_t = true, global = true)]
     implicit_select: bool,
 
-    #[arg(long, default_value = "p", global = true)]
+    #[arg(long, default_value = DEFAULT_ENTER_MODE, global = true)]
     enter_mode: String,
 }
 
@@ -42,6 +43,8 @@ enum Cmd {
     Cred(CredArgs),
     #[command(name = "__askpass")]
     Askpass(AskpassArgs),
+    #[command(name = "__reset")]
+    Reset,
     Ssh(PassthroughArgs),
     Scp(PassthroughArgs),
     #[command(name = "print-ssh-config-path")]
@@ -136,6 +139,7 @@ where
         Some(Cmd::Add(a)) => run_add(a),
         Some(Cmd::Cred(a)) => run_cred(a),
         Some(Cmd::Askpass(a)) => run_askpass(a),
+        Some(Cmd::Reset) => termio::restore_after_child(),
         Some(Cmd::Ssh(a)) => run_ssh_passthrough("ssh", a),
         Some(Cmd::Scp(a)) => run_ssh_passthrough("scp", a),
         Some(Cmd::PrintSshConfigPath) => {
@@ -147,16 +151,23 @@ where
     }
 }
 
+/// Every mode spawns the session in a real tmux pane, which is what makes the
+/// session loggable and keeps a remote that dies mid-escape-sequence from
+/// reaching the terminal directly. Unrecognized input takes the default.
 pub(crate) fn normalize_enter_mode(raw: &str) -> &str {
     match raw.trim().to_lowercase().as_str() {
-        "p" | "pane" => "p",
         "o" | "origin" => "o",
         "w" | "window" => "w",
         "s" | "split" | "split-h" => "s",
         "v" | "split-v" => "v",
-        _ => "p",
+        _ => DEFAULT_ENTER_MODE,
     }
 }
+
+/// Origin pane: the session opens where the picker was invoked from. This
+/// respawns that pane, killing whatever was running there. Override with
+/// `set -g @rustasshn_enter_mode 'w'|'v'|'s'` in tmux.conf.
+pub(crate) const DEFAULT_ENTER_MODE: &str = "o";
 
 fn run_list(args: ListArgs) -> Result<()> {
     let hosts = sshconfig::load_default()?;
@@ -248,8 +259,10 @@ fn run_connect(args: ConnectArgs) -> Result<()> {
         c
     };
 
+    // `connect` is what the zsh `tssm-run` wrapper calls, so stale input from
+    // that wrapper should not reach ssh.
     termio::sanitize_stdin_before_exec().ok();
-    let status = cmd.status().with_context(|| format!("exec ssh {alias}"))?;
+    let status = tty::run_child(&mut cmd).with_context(|| format!("exec ssh {alias}"))?;
     exit_from_status(status)
 }
 
@@ -503,6 +516,16 @@ pub(crate) fn parse_askpass_prompt_target(prompt: &str) -> Option<SshCredentialT
 }
 
 fn run_picker(cli: Cli) -> Result<()> {
+    // Every connect mode spawns a tmux pane, so outside tmux the picker has
+    // nothing it can safely do. Refusing here beats offering an action that
+    // would hand the bare terminal to ssh and log nothing.
+    if !tmuxrun::in_tmux() {
+        bail!(
+            "the host picker requires tmux: start a tmux session first.\n\
+             To connect without tmux, use `rustasshn connect <alias>`, or `rustasshn ssh ...` / `rustasshn scp ...`."
+        )
+    }
+
     let hosts = sshconfig::load_default()?;
     let state_path = state::default_path()?;
     let store = state::load(&state_path)?;
@@ -529,12 +552,10 @@ fn run_picker(cli: Cli) -> Result<()> {
     let start_in_search = cli.mode.trim().to_lowercase() != "normal";
     let enter_mode = normalize_enter_mode(&cli.enter_mode).to_string();
 
-    let host_users_for_connect = host_users.clone();
     let sess_new = sess.clone();
     let sess_v = sess.clone();
     let sess_h = sess.clone();
     let sess_t = sess.clone();
-    let sess_log = sess.clone();
     let sess_o = sess.clone();
     let app = ui::AppConfig {
         hosts,
@@ -543,26 +564,13 @@ fn run_picker(cli: Cli) -> Result<()> {
         start_in_search,
         implicit_select: cli.implicit_select,
         enter_mode,
-        in_tmux: tmuxrun::in_tmux,
         add_host: sshconfig::add_host_to_primary,
         exec_credential: credential_command,
-        connect_in_pane: Arc::new(move |alias, enable_askpass| {
-            ssh_command_with_askpass(
-                alias,
-                &host_users_for_connect,
-                if enable_askpass {
-                    askpass_path.as_deref()
-                } else {
-                    None
-                },
-            )
-        }),
         new_window: Arc::new(move |alias| sess_new.new_window(alias)),
         split_vert: Arc::new(move |alias| sess_v.split_vertical(alias)),
         split_horiz: Arc::new(move |alias| sess_h.split_horizontal(alias)),
         respawn_origin: Arc::new(move |alias| sess_o.respawn_origin_pane(alias)),
         tiled: Arc::new(move |aliases, layout| sess_t.tiled(aliases, layout)),
-        setup_logging: Arc::new(move |alias| sess_log.setup_pane_logging(alias)),
     };
 
     ui::run(app)
@@ -642,34 +650,6 @@ fn ensure_askpass_script() -> Result<Option<std::path::PathBuf>> {
     Ok(Some(path))
 }
 
-fn ssh_command_with_askpass(
-    alias: &str,
-    host_users: &std::collections::HashMap<String, String>,
-    askpass_script: Option<&Path>,
-) -> Command {
-    let mut cmd;
-    if let Some(script) = askpass_script {
-        // For the UI path, we only enable askpass when credential exists.
-        // ui::App enforces this via tmuxrun Session logic and has_credential.
-        cmd = Command::new("ssh");
-        cmd.arg("-o")
-            .arg("PubkeyAuthentication=no")
-            .arg("-o")
-            .arg("PreferredAuthentications=keyboard-interactive,password")
-            .arg(alias);
-        let user = host_users.get(alias).cloned().unwrap_or_default();
-        cmd.env("TSSM_HOST", alias)
-            .env("TSSM_USER", user)
-            .env("SSH_ASKPASS", script)
-            .env("SSH_ASKPASS_REQUIRE", "force")
-            .env("DISPLAY", "1");
-    } else {
-        cmd = Command::new("ssh");
-        cmd.arg(alias);
-    }
-    cmd
-}
-
 fn run_ssh_passthrough(binary: &str, args: PassthroughArgs) -> Result<()> {
     let bin_path = which::which(binary).with_context(|| format!("{binary} not found in PATH"))?;
     let mut cmd = Command::new(&bin_path);
@@ -702,12 +682,12 @@ fn run_ssh_passthrough(binary: &str, args: PassthroughArgs) -> Result<()> {
                 .env("SSH_ASKPASS_REQUIRE", "force")
                 .env("DISPLAY", "1");
 
-            let status = cmd.status()?;
+            let status = tty::run_child(&mut cmd)?;
             return exit_from_status(status);
         }
     }
 
-    let status = cmd.status()?;
+    let status = tty::run_child(&mut cmd)?;
     exit_from_status(status)
 }
 

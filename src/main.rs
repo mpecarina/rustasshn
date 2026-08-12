@@ -6,6 +6,7 @@ mod sshconfig;
 mod state;
 mod termio;
 mod tmuxrun;
+mod tty;
 mod ui;
 
 fn main() {

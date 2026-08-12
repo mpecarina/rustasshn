@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
@@ -86,12 +86,16 @@ impl Session {
             && has(alias)
         {
             let user = self.host_users.get(alias).cloned().unwrap_or_default();
+            let (log_start, log_stop) = pipe_bracket(alias);
             return format!(
-                "export TSSM_HOST={} TSSM_USER={} SSH_ASKPASS={} SSH_ASKPASS_REQUIRE=force DISPLAY=1; ssh -o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password {}; exec {} -l",
+                "export TSSM_HOST={} TSSM_USER={} SSH_ASKPASS={} SSH_ASKPASS_REQUIRE=force DISPLAY=1; {}ssh -o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password {}; {}{}exec {} -l",
                 shell_quote(alias),
                 shell_quote(&user),
                 shell_quote(&script.to_string_lossy()),
+                log_start,
                 shell_quote(alias),
+                log_stop,
+                reset_prefix(),
                 shell_quote(&sh)
             );
         }
@@ -99,19 +103,14 @@ impl Session {
     }
 
     pub fn new_window(&self, alias: &str) -> Result<()> {
-        let pane_id = self.output(&[
+        self.run(&[
             "new-window",
-            "-P",
-            "-F",
-            "#{pane_id}",
             "-n",
             alias,
             login_shell().as_str(),
             "-lc",
             self.ssh_command_string(alias).as_str(),
-        ])?;
-        self.setup_logging(&pane_id, alias);
-        Ok(())
+        ])
     }
 
     pub fn respawn_origin_pane(&self, alias: &str) -> Result<()> {
@@ -123,7 +122,6 @@ impl Session {
             // Fallback: behave like "pane" (current pane).
             let cmd = self.ssh_command_string(alias);
             self.run(&["respawn-pane", "-k", "-c", "#{pane_current_path}", "--", login_shell().as_str(), "-lc", cmd.as_str()])?;
-            self.setup_pane_logging(alias);
             return Ok(());
         }
 
@@ -147,42 +145,31 @@ impl Session {
             "-lc",
             cmd.as_str(),
         ])?;
-        self.setup_logging(origin_pane.trim(), alias);
         Ok(())
     }
 
     pub fn split_vertical(&self, alias: &str) -> Result<()> {
-        let pane_id = self.output(&[
+        self.run(&[
             "split-window",
-            "-P",
-            "-F",
-            "#{pane_id}",
             "-v",
             "-c",
             "#{pane_current_path}",
             login_shell().as_str(),
             "-lc",
             self.ssh_command_string(alias).as_str(),
-        ])?;
-        self.setup_logging(&pane_id, alias);
-        Ok(())
+        ])
     }
 
     pub fn split_horizontal(&self, alias: &str) -> Result<()> {
-        let pane_id = self.output(&[
+        self.run(&[
             "split-window",
-            "-P",
-            "-F",
-            "#{pane_id}",
             "-h",
             "-c",
             "#{pane_current_path}",
             login_shell().as_str(),
             "-lc",
             self.ssh_command_string(alias).as_str(),
-        ])?;
-        self.setup_logging(&pane_id, alias);
-        Ok(())
+        ])
     }
 
     pub fn tiled(&self, aliases: &[String], layout: &str) -> Result<()> {
@@ -206,17 +193,9 @@ impl Session {
             self.ssh_command_string(&aliases[0]).as_str(),
         ])?;
 
-        if let Ok(pane_id) = self.output(&["display-message", "-p", "-t", &window_id, "#{pane_id}"])
-        {
-            self.setup_logging(&pane_id, &aliases[0]);
-        }
-
         for alias in aliases.iter().skip(1) {
-            let pane_id = self.output(&[
+            self.run(&[
                 "split-window",
-                "-P",
-                "-F",
-                "#{pane_id}",
                 "-v",
                 "-t",
                 &window_id,
@@ -224,50 +203,73 @@ impl Session {
                 "-lc",
                 self.ssh_command_string(alias).as_str(),
             ])?;
-            self.setup_logging(&pane_id, alias);
             let _ = self.run(&["select-layout", "-t", &window_id, layout]);
         }
         let _ = self.run(&["select-layout", "-t", &window_id, layout]);
         Ok(())
     }
+}
 
-    pub fn setup_pane_logging(&self, alias: &str) {
-        if !in_tmux() {
-            return;
-        }
-        let pane_id = match self.output(&["display-message", "-p", "#{pane_id}"]) {
-            Ok(v) => v,
-            Err(_) => return,
-        };
-        self.setup_logging(&pane_id, alias);
-    }
+fn pipe_sink(log_path: &Path) -> String {
+    format!(
+        "cat >> {} 2>/dev/null",
+        shell_quote(&log_path.to_string_lossy())
+    )
+}
 
-    fn setup_logging(&self, pane_id: &str, alias: &str) {
-        if logging_disabled() {
-            return;
-        }
-        let log_path = match ensure_log_file(alias) {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-        let _ = self.run(&[
-            "pipe-pane",
-            "-O",
-            "-t",
-            pane_id,
-            "-o",
-            format!(
-                "cat >> {} 2>/dev/null",
-                shell_quote(&log_path.to_string_lossy())
-            )
-            .as_str(),
-        ]);
+/// Shell fragments that open and close pane logging from *inside* the pane, so
+/// the pipe covers exactly the ssh session: it closes when ssh exits rather than
+/// following the login shell that replaces it, it captures from the session's
+/// first byte, and the pane names its own target through `$TMUX_PANE` instead of
+/// leaving tmux to resolve one.
+///
+/// Both fragments are empty when logging is off, so we never close a pipe the
+/// user opened themselves.
+fn pipe_bracket(alias: &str) -> (String, String) {
+    if logging_disabled() {
+        return (String::new(), String::new());
     }
+    let Ok(log_path) = ensure_log_file(alias) else {
+        return (String::new(), String::new());
+    };
+    (pipe_start_cmd(&log_path), pipe_stop_cmd())
+}
+
+fn pipe_start_cmd(log_path: &Path) -> String {
+    // `-o` is deliberately absent: it toggles, so a second call would close an
+    // existing pipe rather than replace it.
+    format!(
+        "tmux pipe-pane -O -t \"$TMUX_PANE\" {}; ",
+        shell_quote(&pipe_sink(log_path))
+    )
+}
+
+fn pipe_stop_cmd() -> String {
+    "tmux pipe-pane -t \"$TMUX_PANE\"; ".to_string()
 }
 
 pub fn ssh_command(alias: &str) -> String {
     let sh = login_shell();
-    format!("ssh {}; exec {} -l", shell_quote(alias), shell_quote(&sh))
+    let (log_start, log_stop) = pipe_bracket(alias);
+    // Logging stops before the reset, so the reset's escape bytes stay out of
+    // the log file.
+    format!(
+        "{}ssh {}; {}{}exec {} -l",
+        log_start,
+        shell_quote(alias),
+        log_stop,
+        reset_prefix(),
+        shell_quote(&sh)
+    )
+}
+
+/// The pane's login shell starts the instant ssh exits, with no gap in which to
+/// notice a terminal the remote left mangled. Undo that damage in between.
+fn reset_prefix() -> String {
+    match std::env::current_exe() {
+        Ok(p) => format!("{} __reset; ", shell_quote(&p.to_string_lossy())),
+        Err(_) => String::new(),
+    }
 }
 
 fn login_shell() -> String {
@@ -361,22 +363,115 @@ pub fn sanitize_alias(s: &str) -> String {
 mod tests {
     use super::*;
 
+    /// The command builders consult logging policy, and with logging on they
+    /// create the log file as a side effect. Turning it off keeps these tests
+    /// off the filesystem and independent of `XDG_CONFIG_HOME`, which other
+    /// tests in this process mutate.
+    fn without_logging() {
+        unsafe { std::env::set_var("TSSM_DISABLE_LOGGING", "1") };
+    }
+
     #[test]
     fn test_ssh_command_quotes_alias() {
+        without_logging();
         assert_eq!(
             ssh_command("prod'box"),
-            "ssh 'prod'\"'\"'box'; exec '/bin/zsh' -l"
+            format!("ssh 'prod'\"'\"'box'; {}exec '/bin/zsh' -l", reset_prefix())
         );
     }
 
     #[test]
     fn test_ssh_command_simple_alias() {
-        assert_eq!(ssh_command("edge1"), "ssh 'edge1'; exec '/bin/zsh' -l");
+        without_logging();
+        assert_eq!(
+            ssh_command("edge1"),
+            format!("ssh 'edge1'; {}exec '/bin/zsh' -l", reset_prefix())
+        );
     }
 
     #[test]
     fn test_ssh_command_empty_alias() {
-        assert_eq!(ssh_command(""), "ssh ''; exec '/bin/zsh' -l");
+        without_logging();
+        assert_eq!(
+            ssh_command(""),
+            format!("ssh ''; {}exec '/bin/zsh' -l", reset_prefix())
+        );
+    }
+
+    #[test]
+    fn test_logging_disabled_emits_no_bracket() {
+        without_logging();
+        assert_eq!(pipe_bracket("edge1"), (String::new(), String::new()));
+        assert!(!ssh_command("edge1").contains("pipe-pane"));
+    }
+
+    #[test]
+    fn test_pipe_start_cmd_targets_own_pane_and_quotes_path() {
+        let got = pipe_start_cmd(Path::new("/logs/edge 1/it's.log"));
+        assert_eq!(
+            got,
+            "tmux pipe-pane -O -t \"$TMUX_PANE\" 'cat >> '\"'\"'/logs/edge 1/it'\"'\"'\"'\"'\"'\"'\"'\"'s.log'\"'\"' 2>/dev/null'; "
+        );
+        // `$TMUX_PANE` must stay expandable by the pane's shell.
+        assert!(got.contains("\"$TMUX_PANE\""));
+        // `-o` toggles rather than replaces, so it must not appear.
+        assert!(!got.contains(" -o "));
+    }
+
+    #[test]
+    fn test_pipe_stop_cmd_closes_pipe_for_own_pane() {
+        assert_eq!(pipe_stop_cmd(), "tmux pipe-pane -t \"$TMUX_PANE\"; ");
+    }
+
+    #[test]
+    fn test_pane_command_brackets_ssh_with_logging() {
+        // Assembled directly so the test does not depend on logging policy.
+        let (start, stop) = (pipe_start_cmd(Path::new("/tmp/x.log")), pipe_stop_cmd());
+        let got = format!(
+            "{start}ssh 'edge1'; {stop}{}exec '/bin/zsh' -l",
+            reset_prefix()
+        );
+
+        let open = got.find("pipe-pane -O").expect("no pipe open");
+        let ssh = got.find("ssh 'edge1'").expect("no ssh");
+        let close = got.rfind("pipe-pane -t").expect("no pipe close");
+        let reset = got.find("__reset").expect("no reset");
+        let shell = got.find("exec ").expect("no exec");
+
+        // Open before ssh so the session is captured from its first byte;
+        // close before the reset so reset bytes stay out of the log.
+        assert!(
+            open < ssh && ssh < close && close < reset && reset < shell,
+            "wrong order: {got}"
+        );
+    }
+
+    #[test]
+    fn test_reset_prefix_is_quoted_and_trailing_separated() {
+        let p = reset_prefix();
+        assert!(p.ends_with("__reset; "), "unexpected prefix: {p:?}");
+        assert!(p.starts_with('\''), "exe path must be quoted: {p:?}");
+    }
+
+    #[test]
+    fn test_ssh_command_resets_between_ssh_and_shell() {
+        let got = ssh_command("edge1");
+        let reset = got.find("__reset").expect("reset step missing");
+        let ssh = got.find("ssh ").expect("ssh missing");
+        let shell = got.find("exec ").expect("exec missing");
+        assert!(ssh < reset && reset < shell, "wrong order: {got}");
+    }
+
+    #[test]
+    fn test_session_ssh_command_resets_on_askpass_path() {
+        let mut s = Session::default();
+        s.askpass_script = Some(PathBuf::from("/tmp/tssm-askpass.sh"));
+        s.host_users.insert("edge1".into(), "admin".into());
+        s.has_credential = Some(Arc::new(|a| a == "edge1"));
+        let got = s.ssh_command_string("edge1");
+        let reset = got.find("__reset").expect("reset step missing");
+        let shell = got.find("exec ").expect("exec missing");
+        assert!(reset < shell, "wrong order: {got}");
     }
 
     #[test]

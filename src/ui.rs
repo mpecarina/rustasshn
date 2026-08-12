@@ -5,12 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
-use crossterm::{execute, terminal};
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -18,14 +13,12 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::sshconfig;
 use crate::state;
-use crate::termio;
+use crate::tty;
 
 const LIST_PAGE_HEIGHT: usize = 12;
 
-pub type ConnectFn = Arc<dyn Fn(&str, bool) -> Command + Send + Sync>;
 pub type ActionFn = Arc<dyn Fn(&str) -> Result<()> + Send + Sync>;
 pub type TiledFn = Arc<dyn Fn(&[String], &str) -> Result<()> + Send + Sync>;
-pub type LogFn = Arc<dyn Fn(&str) + Send + Sync>;
 
 pub struct AppConfig {
     pub hosts: Vec<sshconfig::Host>,
@@ -35,17 +28,14 @@ pub struct AppConfig {
     pub implicit_select: bool,
     pub enter_mode: String,
 
-    pub in_tmux: fn() -> bool,
     pub add_host: fn(sshconfig::AddHostInput) -> Result<()>,
     pub exec_credential: fn(&str, &str, &str, &str) -> Result<Command>,
 
-    pub connect_in_pane: ConnectFn,
     pub new_window: ActionFn,
     pub split_vert: ActionFn,
     pub split_horiz: ActionFn,
     pub respawn_origin: ActionFn,
     pub tiled: TiledFn,
-    pub setup_logging: LogFn,
 }
 
 #[derive(Clone)]
@@ -101,38 +91,18 @@ struct Model {
 }
 
 pub fn run(app: AppConfig) -> Result<()> {
-    enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    terminal::enable_raw_mode()?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    terminal.clear()?;
-
+    let mut tty = tty::Tty::claim()?;
     let mut m = Model::new(app);
-    let res = loop {
-        terminal.draw(|f| {
-            let size = f.area();
-            m.draw(f, size);
-        })?;
 
-        if event::poll(std::time::Duration::from_millis(50))?
-            && let Event::Key(k) = event::read()?
-            && let Some(action) = m.handle_key(k)?
-        {
-            break action;
-        }
-    };
+    // On `Err` the `?` below drops `tty`, which restores the terminal before
+    // main prints the error.
+    let action = event_loop(tty.terminal(), &mut m)?;
 
-    disable_raw_mode().ok();
-    let mut stdout = std::io::stdout();
-    execute!(stdout, LeaveAlternateScreen).ok();
-
-    match res {
+    match action {
+        // Drop restores.
         Action::Quit => Ok(()),
         Action::Exec(mut cmd) => {
-            termio::sanitize_stdin_before_exec().ok();
-            let status = cmd.status()?;
+            let status = tty.hand_off(&mut cmd)?;
             if status.success() {
                 Ok(())
             } else {
@@ -146,8 +116,7 @@ pub fn run(app: AppConfig) -> Result<()> {
             mut cmd,
             success_hint,
         } => {
-            termio::sanitize_stdin_before_exec().ok();
-            let status = cmd.status()?;
+            let status = tty.hand_off(&mut cmd)?;
             if !status.success() {
                 eprintln!("command failed (exit status: {status})");
                 eprintln!("press Enter to continue");
@@ -158,6 +127,22 @@ pub fn run(app: AppConfig) -> Result<()> {
             eprintln!("press Enter to continue");
             pause_for_enter();
             Ok(())
+        }
+    }
+}
+
+fn event_loop(terminal: &mut Terminal<tty::Backend>, m: &mut Model) -> Result<Action> {
+    loop {
+        terminal.draw(|f| {
+            let size = f.area();
+            m.draw(f, size);
+        })?;
+
+        if event::poll(std::time::Duration::from_millis(50))?
+            && let Event::Key(k) = event::read()?
+            && let Some(action) = m.handle_key(k)?
+        {
+            return Ok(action);
         }
     }
 }
@@ -186,6 +171,8 @@ fn pause_for_enter() {
 
 enum Action {
     Quit,
+    /// Credential subprocesses, the only children that run under the picker's
+    /// own terminal. ssh sessions go to a tmux pane rustasshn never holds.
     Exec(Command),
     ExecWithPause {
         cmd: Command,
@@ -515,21 +502,6 @@ impl Model {
                 self.pending_g = false;
                 return self.run_tiled();
             }
-            (KeyCode::Char('p'), _) => {
-                self.pending_g = false;
-                if let Some(c) = self.current() {
-                    let alias = c.host.alias.clone();
-                    let user = c.host.user.clone();
-                    self.app.store.add_recent(&alias);
-                    let _ = state::save(&self.app.state_path, &mut self.app.store);
-                    (self.app.setup_logging)(&alias);
-                    // determine if askpass should be enabled: stored cred exists.
-                    let has_cred = crate::credentials::get(&alias, &user, "password").is_ok();
-                    let cmd = (self.app.connect_in_pane)(&alias, has_cred);
-                    return Ok(Some(Action::Exec(cmd)));
-                }
-                return Ok(None);
-            }
             _ => {
                 self.pending_g = false;
             }
@@ -537,58 +509,30 @@ impl Model {
         Ok(None)
     }
 
+    /// The action `Enter` runs. The fallback arm is deliberately the same action
+    /// as [`crate::app::DEFAULT_ENTER_MODE`] — `normalize_enter_mode` never
+    /// yields anything else, but this keeps the default in one place.
+    fn enter_action(&self) -> (ActionFn, &'static str) {
+        match self.app.enter_mode.as_str() {
+            "w" => (self.app.new_window.clone(), "opened tmux window"),
+            "v" => (self.app.split_vert.clone(), "opened vertical split"),
+            "s" => (self.app.split_horiz.clone(), "opened horizontal split"),
+            _ => (self.app.respawn_origin.clone(), "opened origin pane"),
+        }
+    }
+
     fn enter_default(&mut self) -> Result<Option<Action>> {
+        let (action, status) = self.enter_action();
         if !self.selected_aliases.is_empty() {
-            match self.app.enter_mode.as_str() {
-                "o" => {
-                    let action = self.app.respawn_origin.clone();
-                    return self.run_multi(action, "opened origin pane");
-                }
-                "v" => {
-                    let action = self.app.split_vert.clone();
-                    return self.run_multi(action, "opened vertical splits");
-                }
-                "s" => {
-                    let action = self.app.split_horiz.clone();
-                    return self.run_multi(action, "opened horizontal splits");
-                }
-                _ => {
-                    let action = self.app.new_window.clone();
-                    return self.run_multi(action, "opened tmux windows");
-                }
-            }
+            return self.run_multi(action, status);
         }
         let Some(c) = self.current().cloned() else {
             return Ok(None);
         };
         let alias = c.host.alias.clone();
-        let user = c.host.user.clone();
         self.app.store.add_recent(&alias);
         let _ = state::save(&self.app.state_path, &mut self.app.store);
-        match self.app.enter_mode.as_str() {
-            "o" => {
-                let action = self.app.respawn_origin.clone();
-                self.run_multi(action, "opened origin pane")
-            }
-            "w" => {
-                let action = self.app.new_window.clone();
-                self.run_multi(action, "opened tmux window")
-            }
-            "v" => {
-                let action = self.app.split_vert.clone();
-                self.run_multi(action, "opened vertical split")
-            }
-            "s" => {
-                let action = self.app.split_horiz.clone();
-                self.run_multi(action, "opened horizontal split")
-            }
-            _ => {
-                (self.app.setup_logging)(&alias);
-                let has_cred = crate::credentials::get(&alias, &user, "password").is_ok();
-                let cmd = (self.app.connect_in_pane)(&alias, has_cred);
-                Ok(Some(Action::Exec(cmd)))
-            }
-        }
+        self.run_multi(action, status)
     }
 
     fn run_tiled(&mut self) -> Result<Option<Action>> {
@@ -604,10 +548,6 @@ impl Model {
             let action = self.app.new_window.clone();
             return self.run_multi(action, "opened tmux window");
         }
-        if !(self.app.in_tmux)() {
-            self.status = "tiled layout requires running inside tmux".to_string();
-            return Ok(None);
-        }
         (self.app.tiled)(&targets, "tiled")?;
         Ok(Some(Action::Quit))
     }
@@ -621,10 +561,6 @@ impl Model {
             self.app.store.add_recent(a);
         }
         let _ = state::save(&self.app.state_path, &mut self.app.store);
-        if !(self.app.in_tmux)() {
-            self.status = "tmux actions require running inside tmux".to_string();
-            return Ok(None);
-        }
         for a in &targets {
             (action)(a)?;
         }
@@ -877,7 +813,7 @@ impl Model {
             .wrap(Wrap { trim: true });
         f.render_widget(list, chunks[1]);
 
-        let help = " / search | enter connect | space select | v split-v | s split-h | w window | t tiled | c store cred | d delete cred | f favorite | F favorites | R recents | a add host | q quit ";
+        let help = " / search | enter connect | space select | w window | o origin | v split-v | s split-h | t tiled | c store cred | d delete cred | f favorite | F favorites | R recents | a add host | q quit ";
         let status = if self.status.is_empty() {
             help.to_string()
         } else {
@@ -1426,17 +1362,14 @@ mod tests {
             state_path: PathBuf::new(),
             start_in_search: false,
             implicit_select: false,
-            enter_mode: "p".to_string(),
-            in_tmux: || false,
+            enter_mode: "w".to_string(),
             add_host: |_| Ok(()),
             exec_credential: |_, _, _, _| Ok(Command::new("true")),
-            connect_in_pane: Arc::new(|_, _| Command::new("true")),
             new_window: Arc::new(|_| Ok(())),
             split_vert: Arc::new(|_| Ok(())),
             split_horiz: Arc::new(|_| Ok(())),
             respawn_origin: Arc::new(|_| Ok(())),
             tiled: Arc::new(|_, _| Ok(())),
-            setup_logging: Arc::new(|_| {}),
         }
     }
 

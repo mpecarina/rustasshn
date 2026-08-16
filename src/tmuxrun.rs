@@ -121,7 +121,16 @@ impl Session {
         if origin_pane.trim().is_empty() {
             // Fallback: behave like "pane" (current pane).
             let cmd = self.ssh_command_string(alias);
-            self.run(&["respawn-pane", "-k", "-c", "#{pane_current_path}", "--", login_shell().as_str(), "-lc", cmd.as_str()])?;
+            self.run(&[
+                "respawn-pane",
+                "-k",
+                "-c",
+                "#{pane_current_path}",
+                "--",
+                login_shell().as_str(),
+                "-lc",
+                cmd.as_str(),
+            ])?;
             return Ok(());
         }
 
@@ -312,7 +321,7 @@ pub fn log_dir(alias: &str) -> Result<PathBuf> {
 }
 
 fn logs_base_dir() -> Result<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(xdg).join("rustasshn").join("logs"));
     }
     if let Some(proj) = ProjectDirs::from("", "", "rustasshn") {
@@ -464,8 +473,10 @@ mod tests {
 
     #[test]
     fn test_session_ssh_command_resets_on_askpass_path() {
-        let mut s = Session::default();
-        s.askpass_script = Some(PathBuf::from("/tmp/tssm-askpass.sh"));
+        let mut s = Session {
+            askpass_script: Some(PathBuf::from("/tmp/tssm-askpass.sh")),
+            ..Default::default()
+        };
         s.host_users.insert("edge1".into(), "admin".into());
         s.has_credential = Some(Arc::new(|a| a == "edge1"));
         let got = s.ssh_command_string("edge1");
@@ -476,8 +487,10 @@ mod tests {
 
     #[test]
     fn test_session_ssh_command_disables_pubkey() {
-        let mut s = Session::default();
-        s.askpass_script = Some(PathBuf::from("/tmp/tssm-askpass.sh"));
+        let mut s = Session {
+            askpass_script: Some(PathBuf::from("/tmp/tssm-askpass.sh")),
+            ..Default::default()
+        };
         s.host_users.insert("edge1".into(), "admin".into());
         s.has_credential = Some(Arc::new(|a| a == "edge1"));
         let got = s.ssh_command_string("edge1");
@@ -487,8 +500,10 @@ mod tests {
 
     #[test]
     fn test_session_ssh_command_without_credential() {
-        let mut s = Session::default();
-        s.askpass_script = Some(PathBuf::from("/tmp/tssm-askpass.sh"));
+        let mut s = Session {
+            askpass_script: Some(PathBuf::from("/tmp/tssm-askpass.sh")),
+            ..Default::default()
+        };
         s.host_users.insert("edge1".into(), "admin".into());
         s.has_credential = Some(Arc::new(|_| false));
         let got = s.ssh_command_string("edge1");

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 
@@ -85,13 +86,22 @@ pub fn add_host(path: &Path, mut input: AddHostInput) -> Result<()> {
     if input.hostname.is_empty() {
         input.hostname = input.alias.clone();
     }
+    for (label, value) in [
+        ("alias", input.alias.as_str()),
+        ("hostname", input.hostname.as_str()),
+        ("user", input.user.as_str()),
+        ("proxyjump", input.proxyjump.as_str()),
+        ("identity file", input.identity_file.as_str()),
+    ] {
+        if value.contains(['\r', '\n', '\0']) {
+            bail!("{label} must be a single line");
+        }
+    }
 
-    let existing = load(&[expand_pathbuf(path)]);
-    if let Ok(current) = existing {
-        for h in current {
-            if h.alias == input.alias {
-                bail!("host alias already exists: {}", input.alias);
-            }
+    let current = load(&[expand_pathbuf(path)])?;
+    for host in current {
+        if host.alias == input.alias {
+            bail!("host alias already exists: {}", input.alias);
         }
     }
 
@@ -106,12 +116,16 @@ pub fn add_host(path: &Path, mut input: AddHostInput) -> Result<()> {
     }
 
     let mut builder = String::new();
-    if let Ok(data) = fs::read_to_string(&path) {
-        builder.push_str(&data);
-        if !builder.ends_with('\n') && !builder.is_empty() {
+    match fs::read_to_string(&path) {
+        Ok(data) => {
+            builder.push_str(&data);
+            if !builder.ends_with('\n') && !builder.is_empty() {
+                builder.push('\n');
+            }
             builder.push('\n');
         }
-        builder.push('\n');
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).with_context(|| "read ssh config before update"),
     }
 
     builder.push_str("Host ");
@@ -141,7 +155,15 @@ pub fn add_host(path: &Path, mut input: AddHostInput) -> Result<()> {
         builder.push('\n');
     }
 
-    let tmp = path.with_extension("tmp");
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config");
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let tmp = path.with_file_name(format!(".{file_name}.{}.{}.tmp", std::process::id(), nonce));
     fs::write(&tmp, builder.as_bytes()).with_context(|| "write ssh config")?;
     #[cfg(unix)]
     {
@@ -485,6 +507,22 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn test_add_host_rejects_multiline_values() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config");
+        let err = add_host(
+            &path,
+            AddHostInput {
+                alias: "edge\n  ProxyCommand unsafe".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("single line"));
+        assert!(!path.exists());
     }
 
     #[test]

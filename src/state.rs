@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -39,8 +40,8 @@ impl Default for Store {
 }
 
 pub fn default_path() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(p).join("rustasshn").join("state.json"));
+    if let Some(path) = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(path).join("rustasshn").join("state.json"));
     }
     if let Some(proj) = ProjectDirs::from("", "", "rustasshn") {
         return Ok(proj.config_dir().join("state.json"));
@@ -85,7 +86,15 @@ pub fn save(path: &Path, store: &mut Store) -> Result<()> {
     }
     let mut data = serde_json::to_vec_pretty(store).with_context(|| "encode state")?;
     data.push(b'\n');
-    let tmp = path.with_extension("tmp");
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("state.json");
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let tmp = path.with_file_name(format!(".{file_name}.{}.{}.tmp", std::process::id(), nonce));
     fs::write(&tmp, &data).with_context(|| "write tmp state")?;
     #[cfg(unix)]
     {

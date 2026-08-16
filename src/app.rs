@@ -388,10 +388,7 @@ fn run_askpass(args: AskpassArgs) -> Result<()> {
 }
 
 pub(crate) fn normalize_prompt_host(host: &str) -> String {
-    let mut h = host
-        .trim()
-        .trim_end_matches(':')
-        .to_string();
+    let mut h = host.trim().trim_end_matches(':').to_string();
 
     if let Some((left, right)) = h.rsplit_once(':')
         && !left.contains(':')
@@ -402,10 +399,7 @@ pub(crate) fn normalize_prompt_host(host: &str) -> String {
         h = left.to_string();
     }
 
-    h = h
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_string();
+    h = h.trim_start_matches('[').trim_end_matches(']').to_string();
     h
 }
 
@@ -423,17 +417,21 @@ pub(crate) fn resolve_prompt_host_with_hosts(
         return env_host.to_string();
     }
 
-    if let Some(env_entry) = hosts.iter().find(|h| h.alias == env_host) {
-        if !env_entry.hostname.trim().is_empty() && env_entry.hostname.trim() == ph {
-            return env_host.to_string();
-        }
+    if let Some(env_entry) = hosts.iter().find(|h| h.alias == env_host)
+        && !env_entry.hostname.trim().is_empty()
+        && env_entry.hostname.trim() == ph
+    {
+        return env_host.to_string();
     }
 
     if hosts.iter().any(|h| h.alias == ph) {
         return ph;
     }
 
-    let mut matches = hosts.iter().filter(|h| h.hostname.trim() == ph).map(|h| h.alias.as_str());
+    let mut matches = hosts
+        .iter()
+        .filter(|h| h.hostname.trim() == ph)
+        .map(|h| h.alias.as_str());
     let first = matches.next();
     if first.is_none() {
         return ph;
@@ -624,11 +622,22 @@ fn ensure_askpass_script() -> Result<Option<std::path::PathBuf>> {
         Err(_) => return Ok(None),
     };
 
-    let home = std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("resolve home"))?;
-    let dir = std::path::PathBuf::from(home)
-        .join(".config")
-        .join("rustasshn");
-    std::fs::create_dir_all(&dir).ok();
+    let dir =
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+            std::path::PathBuf::from(xdg).join("rustasshn")
+        } else {
+            let home = std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("resolve home"))?;
+            std::path::PathBuf::from(home)
+                .join(".config")
+                .join("rustasshn")
+        };
+    std::fs::create_dir_all(&dir).context("create rustasshn config directory")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .context("set rustasshn config directory permissions")?;
+    }
 
     let path = dir.join("askpass.sh");
     let content = format!(
@@ -640,12 +649,26 @@ fn ensure_askpass_script() -> Result<Option<std::path::PathBuf>> {
         Err(_) => true,
     };
     if write {
-        std::fs::write(&path, content.as_bytes())?;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let temp_path = dir.join(format!(".askpass.sh.{}.{}.tmp", std::process::id(), nonce));
+        std::fs::write(&temp_path, content.as_bytes())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o700))?;
+        }
+        if let Err(error) = std::fs::rename(&temp_path, &path) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(error.into());
+        }
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
     }
     Ok(Some(path))
 }

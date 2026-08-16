@@ -1000,7 +1000,9 @@ fn highlight_text(text: &str, terms: &[&str]) -> Vec<Span<'static>> {
         if highlighted {
             spans.push(Span::styled(
                 chunk,
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ));
         } else {
             spans.push(Span::raw(chunk));
@@ -1094,7 +1096,9 @@ fn match_sort_key(query: &str, c: &Candidate) -> Option<MatchSortKey> {
             len: c.alias_lc.len().min(u16::MAX as usize) as u16,
         });
     }
-    if let Some(pos) = all_term_match_pos(&terms, |term| token_prefix_pos(&c.hostname_core_lc, term)) {
+    if let Some(pos) =
+        all_term_match_pos(&terms, |term| token_prefix_pos(&c.hostname_core_lc, term))
+    {
         return Some(MatchSortKey {
             bucket: 3,
             position: pos,
@@ -1117,7 +1121,8 @@ fn match_sort_key(query: &str, c: &Candidate) -> Option<MatchSortKey> {
             len: c.alias_lc.len().min(u16::MAX as usize) as u16,
         });
     }
-    if let Some(pos) = all_term_match_pos(&terms, |term| fuzzy_match_pos(term, &c.hostname_core_lc)) {
+    if let Some(pos) = all_term_match_pos(&terms, |term| fuzzy_match_pos(term, &c.hostname_core_lc))
+    {
         return Some(MatchSortKey {
             bucket: 6,
             position: pos,
@@ -1133,14 +1138,18 @@ fn match_sort_key(query: &str, c: &Candidate) -> Option<MatchSortKey> {
                 len: c.proxyjump_core_lc.len().min(u16::MAX as usize) as u16,
             });
         }
-        if let Some(pos) = all_term_match_pos(&terms, |term| token_prefix_pos(&c.proxyjump_core_lc, term)) {
+        if let Some(pos) =
+            all_term_match_pos(&terms, |term| token_prefix_pos(&c.proxyjump_core_lc, term))
+        {
             return Some(MatchSortKey {
                 bucket: 7,
                 position: pos,
                 len: c.proxyjump_core_lc.len().min(u16::MAX as usize) as u16,
             });
         }
-        if let Some(pos) = all_term_match_pos(&terms, |term| fuzzy_match_pos(term, &c.proxyjump_core_lc)) {
+        if let Some(pos) =
+            all_term_match_pos(&terms, |term| fuzzy_match_pos(term, &c.proxyjump_core_lc))
+        {
             return Some(MatchSortKey {
                 bucket: 7,
                 position: pos,
@@ -1149,7 +1158,8 @@ fn match_sort_key(query: &str, c: &Candidate) -> Option<MatchSortKey> {
         }
     }
 
-    if let Some(pos) = all_term_match_pos(&terms, |term| token_prefix_pos(&c.search_core_lc, term)) {
+    if let Some(pos) = all_term_match_pos(&terms, |term| token_prefix_pos(&c.search_core_lc, term))
+    {
         return Some(MatchSortKey {
             bucket: 8,
             position: pos,
@@ -1165,10 +1175,12 @@ fn match_sort_key(query: &str, c: &Candidate) -> Option<MatchSortKey> {
         });
     }
 
-    all_term_match_pos(&terms, |term| fuzzy_match_pos(term, &c.search_all_lc)).map(|pos| MatchSortKey {
-        bucket: 10,
-        position: pos,
-        len: c.alias_lc.len().min(u16::MAX as usize) as u16,
+    all_term_match_pos(&terms, |term| fuzzy_match_pos(term, &c.search_all_lc)).map(|pos| {
+        MatchSortKey {
+            bucket: 10,
+            position: pos,
+            len: c.alias_lc.len().min(u16::MAX as usize) as u16,
+        }
     })
 }
 
@@ -1202,7 +1214,10 @@ fn strip_domain_suffix(token: &str) -> Option<&str> {
 }
 
 fn split_query_terms(query: &str) -> Vec<&str> {
-    query.split_whitespace().filter(|term| !term.is_empty()).collect()
+    query
+        .split_whitespace()
+        .filter(|term| !term.is_empty())
+        .collect()
 }
 
 fn all_term_match_pos(terms: &[&str], mut matcher: impl FnMut(&str) -> Option<u16>) -> Option<u16> {
@@ -1539,7 +1554,10 @@ mod tests {
     #[test]
     fn test_normalize_search_token_strips_common_domain_suffixes() {
         assert_eq!(normalize_search_token("narrs-dev4.lmig.com"), "narrs-dev4");
-        assert_eq!(normalize_search_token("vmpip-u56cfp5n.lm.lmig.com"), "vmpip-u56cfp5n");
+        assert_eq!(
+            normalize_search_token("vmpip-u56cfp5n.lm.lmig.com"),
+            "vmpip-u56cfp5n"
+        );
         assert_eq!(normalize_search_token("192.168.126.4"), "192.168.126.4");
     }
 

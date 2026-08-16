@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 const SERVICE_PREFIX: &str = "rustasshn";
 

@@ -17,7 +17,11 @@ set -g @rustasshn_enter_mode 'o'
 run '~/.tmux/plugins/tpm/tpm'
 ```
 
-Then in tmux: `prefix + I` to install.
+Then in tmux: `prefix + I` to install. A Rust toolchain with `cargo` is required
+for the first build.
+
+`bin/rustasshn` is a tracked wrapper that builds `target/release/rustasshn` when
+the binary is missing, the git commit changed, or local Rust sources are newer.
 
 ## Install (Manual)
 
@@ -27,21 +31,22 @@ Then in tmux: `prefix + I` to install.
 git clone https://github.com/mpecarina/rustasshn.git
 ```
 
-2) Build the binary and place it at `bin/rustasshn`:
+2) Build the binary through the tracked wrapper:
 
 ```sh
 cd rustasshn
-cargo build --release
-mkdir -p bin
-cp target/release/rustasshn bin/rustasshn
+./bin/rustasshn --version
 ```
+
+The wrapper remains in `bin/`; the compiled binary and commit stamp are kept
+under `target/release/`.
 
 3) Source the plugin file from `~/.tmux.conf`:
 
 ```tmux
 run-shell '/absolute/path/to/rustasshn/rustasshn.tmux'
 
-# tell the wrapper where the binary is
+# tell the plugin where the tracked wrapper is
 set -g @rustasshn_bin '/absolute/path/to/rustasshn/bin/rustasshn'
 ```
 

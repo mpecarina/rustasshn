@@ -15,6 +15,10 @@ elif [[ ! -f "${STAMP_FILE}" ]]; then
   NEEDS_BUILD=1
 elif [[ "$(cat "${STAMP_FILE}" 2>/dev/null)" != "${CURRENT_COMMIT}" ]]; then
   NEEDS_BUILD=1
+elif [[ "${REPO_ROOT}/Cargo.toml" -nt "${TARGET_BIN}" || "${REPO_ROOT}/Cargo.lock" -nt "${TARGET_BIN}" ]]; then
+  NEEDS_BUILD=1
+elif find "${REPO_ROOT}/src" -type f -newer "${TARGET_BIN}" -print -quit | grep -q .; then
+  NEEDS_BUILD=1
 fi
 
 if [[ "${NEEDS_BUILD}" -eq 1 ]]; then

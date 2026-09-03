@@ -4,12 +4,13 @@ tmux host picker for SSH based on your `~/.ssh/config`.
 
 ## Demo
 
-```sh
-# Run inside tmux, or press prefix + s after installing the plugin.
-~/.tmux/plugins/rustasshn/bin/rustasshn
-```
-
 https://github.com/user-attachments/assets/5afb5516-a6af-4c9a-b319-1b9e3e6deecb
+
+## Tmux
+
+Press `prefix + s`.
+
+https://github.com/user-attachments/assets/efc9ac6d-da01-422c-85fa-9f76f9bd3c01
 
 ## Install (TPM)
 
@@ -156,12 +157,11 @@ set -g @rustasshn_enter_mode 's'   # horizontal split
 `origin` falls back to the current pane when the origin pane is not known
 (for example when not launched via popup).
 
-## Example Config (Matches My Setup)
+## Example Config
 
 ### tmux (`~/.tmux.conf`)
 
-This matches the defaults I run (popup UI, start in search, and `Enter` opens in
-the origin pane that spawned the popup):
+Popup UI starts in search mode, and `Enter` opens in the origin pane:
 
 ```tmux
 set -g @plugin 'mpecarina/rustasshn'
@@ -174,8 +174,7 @@ set -g @rustasshn_key 's'
 
 ### zsh (`~/.zshrc`)
 
-I use `rustasshn` as the default `ssh`/`scp` so stored credentials can enable an
-SSH_ASKPASS layer automatically:
+Wrap `ssh` and `scp` so stored credentials can enable an SSH_ASKPASS layer:
 
 ```zsh
 # Make sure the rustasshn binary is on PATH (example path if installed via TPM)

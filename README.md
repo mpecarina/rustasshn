@@ -4,13 +4,13 @@ tmux host picker for SSH based on your `~/.ssh/config`.
 
 ## Demo
 
-https://github.com/user-attachments/assets/5afb5516-a6af-4c9a-b319-1b9e3e6deecb
+https://github.com/user-attachments/assets/ded1f1de-77ce-4b23-b363-fb0cb4c9ebf1
 
 ## Tmux
 
 Press `prefix + s`.
 
-https://github.com/user-attachments/assets/efc9ac6d-da01-422c-85fa-9f76f9bd3c01
+https://github.com/user-attachments/assets/b582f3c6-41f8-4066-917f-38c0fbf061a7
 
 ## Install (TPM)
 

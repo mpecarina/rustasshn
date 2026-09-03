@@ -38,7 +38,7 @@ setup() {
   tmux_client set-option -g status-left '#[bold,fg=#89b4fa] rustasshn #[default]'
   tmux_client set-option -g status-right '#[fg=#a6adc8]%H:%M '
   tmux_client set-option -g popup-border-style 'fg=#89b4fa'
-  tmux_client set-option -g @rustasshn_bin "${repo_root}/target/release/rustasshn"
+  tmux_client set-option -g @rustasshn_bin "${repo_root}/bin/rustasshn"
   tmux_client set-option -g @rustasshn_key s
   tmux_client set-option -g @rustasshn_launch_mode popup
   tmux_client set-option -g @rustasshn_mode search

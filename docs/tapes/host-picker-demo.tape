@@ -32,6 +32,7 @@ Env TMUX "terminal-rec-demo"
 Hide
 Type "PS1='❯ ' && bash docs/tapes/host-picker-demo.sh setup && clear"
 Enter
+Sleep 800ms
 Show
 
 Type "./bin/rustasshn"

@@ -25,12 +25,11 @@ Set WindowBar "Colorful"
 Hide
 Type "PS1='❯ ' && bash docs/tapes/rustasshn-tmux-demo.sh setup && clear"
 Enter
-Show
-
 Type "bash docs/tapes/rustasshn-tmux-demo.sh attach"
-Sleep 1200ms
 Enter
 Wait+Screen@20s /rustasshn/
+Sleep 500ms
+Show
 Sleep 1200ms
 
 Ctrl+b

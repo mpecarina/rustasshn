@@ -2,6 +2,15 @@
 
 tmux host picker for SSH based on your `~/.ssh/config`.
 
+## Demo
+
+```sh
+# Run inside tmux, or press prefix + s after installing the plugin.
+~/.tmux/plugins/rustasshn/bin/rustasshn
+```
+
+https://github.com/user-attachments/assets/5afb5516-a6af-4c9a-b319-1b9e3e6deecb
+
 ## Install (TPM)
 
 Add this to your `~/.tmux.conf`:
